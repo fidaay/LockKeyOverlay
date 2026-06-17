@@ -1,4 +1,5 @@
 using System.IO;
+using System.Diagnostics;
 using System.Text.Json;
 
 namespace LockKeyOverlay;
@@ -87,18 +88,33 @@ internal sealed class ConfigService
 
     public ServiceResult Save(AppConfig config)
     {
+        string? tempFilePath = null;
+
         try
         {
             Directory.CreateDirectory(_configDirectoryPath);
 
             string json = JsonSerializer.Serialize(config, SerializerOptions);
-            File.WriteAllText(ConfigFilePath, json);
+            tempFilePath = Path.Combine(_configDirectoryPath, $"{ConfigFileName}.{Guid.NewGuid():N}.tmp");
+
+            File.WriteAllText(tempFilePath, json);
+
+            if (File.Exists(ConfigFilePath))
+                File.Replace(tempFilePath, ConfigFilePath, destinationBackupFileName: null, ignoreMetadataErrors: true);
+            else
+                File.Move(tempFilePath, ConfigFilePath);
+
+            tempFilePath = null;
 
             return ServiceResult.Success("Configuration saved.");
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             return ServiceResult.Failure("Configuration could not be saved.", ex);
+        }
+        finally
+        {
+            TryDeleteTemporaryFile(tempFilePath);
         }
     }
 
@@ -114,6 +130,21 @@ internal sealed class ConfigService
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             return ServiceResult.Failure("Configuration could not be deleted.", ex);
+        }
+    }
+
+    private static void TryDeleteTemporaryFile(string? tempFilePath)
+    {
+        if (string.IsNullOrWhiteSpace(tempFilePath) || !File.Exists(tempFilePath))
+            return;
+
+        try
+        {
+            File.Delete(tempFilePath);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Debug.WriteLine($"Temporary configuration file could not be deleted: {ex.Message}");
         }
     }
 }

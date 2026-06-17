@@ -66,7 +66,7 @@ internal sealed class ForegroundHookService : IDisposable
         uint dwEventThread,
         uint dwmsEventTime)
     {
-        ForegroundChanged?.Invoke(this, EventArgs.Empty);
+        EventInvocation.Raise(ForegroundChanged, this, EventArgs.Empty);
     }
 
     [DllImport("user32.dll", SetLastError = true)]

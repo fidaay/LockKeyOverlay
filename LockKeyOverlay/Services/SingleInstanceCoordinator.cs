@@ -118,7 +118,7 @@ internal sealed class SingleInstanceCoordinator : IDisposable
         if (timedOut || _disposed)
             return;
 
-        ActivationRequested?.Invoke(this, EventArgs.Empty);
+        EventInvocation.Raise(ActivationRequested, this, EventArgs.Empty);
     }
 
     private void ThrowIfDisposed()

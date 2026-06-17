@@ -42,8 +42,7 @@ public partial class MainWindow : Window
     private bool _suppressConfigSave;
 
     private Drawing.Point _dragStartMousePx;
-    private double _dragStartLeftDip;
-    private double _dragStartTopDip;
+    private Drawing.Point _dragStartWindowTopLeftPx;
 
     private BitmapImage? _numLockOnIcon;
     private BitmapImage? _numLockOffIcon;
@@ -374,7 +373,7 @@ public partial class MainWindow : Window
             source.CompositionTarget.TransformToDevice.M22);
     }
 
-    private Drawing.Point GetWindowTopLeftPx()
+    private Drawing.Point GetWindowTopLeftPxWithFallbackScale()
     {
         var (scaleX, scaleY) = GetWindowDpiScale();
 
@@ -382,6 +381,20 @@ public partial class MainWindow : Window
         int y = (int)Math.Round(Top * scaleY);
 
         return new Drawing.Point(x, y);
+    }
+
+    private WindowPositionSnapshot? CaptureCurrentWindowPosition()
+    {
+        IReadOnlyList<ScreenSnapshot> screens = CaptureScreens();
+        if (screens.Count == 0)
+            return null;
+
+        return _screenPlacementService.CaptureWindowPosition(
+            Left,
+            Top,
+            screens,
+            CapturePrimaryScreen(),
+            GetWindowDpiScale());
     }
 
     private static IReadOnlyList<ScreenSnapshot> CaptureScreens()
@@ -444,14 +457,14 @@ public partial class MainWindow : Window
         if (_suppressConfigSave)
             return;
 
-        var currentWindowTopLeftPx = GetWindowTopLeftPx();
-        var currentScreen = Forms.Screen.FromPoint(currentWindowTopLeftPx);
+        WindowPositionSnapshot? currentWindowPosition = CaptureCurrentWindowPosition();
+        Drawing.Point currentWindowTopLeftPx = currentWindowPosition?.TopLeftPx ?? GetWindowTopLeftPxWithFallbackScale();
 
         var config = new AppConfig
         {
             Left = Left,
             Top = Top,
-            ScreenDeviceName = currentScreen.DeviceName,
+            ScreenDeviceName = currentWindowPosition?.Screen.DeviceName,
             LeftPx = currentWindowTopLeftPx.X,
             TopPx = currentWindowTopLeftPx.Y,
             IsVisible = IsVisible,
@@ -558,8 +571,7 @@ public partial class MainWindow : Window
 
         _isDragging = true;
         _dragStartMousePx = Forms.Cursor.Position;
-        _dragStartLeftDip = Left;
-        _dragStartTopDip = Top;
+        _dragStartWindowTopLeftPx = CaptureCurrentWindowPosition()?.TopLeftPx ?? GetWindowTopLeftPxWithFallbackScale();
 
         Mouse.Capture(OverlayBorder);
     }
@@ -572,44 +584,22 @@ public partial class MainWindow : Window
         if (!_isDragging)
             return;
 
-        var src = PresentationSource.FromVisual(this);
-        if (src?.CompositionTarget is null)
-            return;
-
-        double scaleX = src.CompositionTarget.TransformToDevice.M11;
-        double scaleY = src.CompositionTarget.TransformToDevice.M22;
-
         var currentMousePx = Forms.Cursor.Position;
+        IReadOnlyList<ScreenSnapshot> screens = CaptureScreens();
+        ScreenSnapshot? primaryScreen = CapturePrimaryScreen();
 
-        int dxPx = currentMousePx.X - _dragStartMousePx.X;
-        int dyPx = currentMousePx.Y - _dragStartMousePx.Y;
+        WindowPlacement placement = _screenPlacementService.MoveWindowByPhysicalDelta(
+            _dragStartWindowTopLeftPx,
+            _dragStartMousePx,
+            currentMousePx,
+            screens,
+            primaryScreen,
+            GetWindowDpiScale(),
+            ActualWidth,
+            ActualHeight);
 
-        double dxDip = dxPx / scaleX;
-        double dyDip = dyPx / scaleY;
-
-        double targetLeftDip = _dragStartLeftDip + dxDip;
-        double targetTopDip = _dragStartTopDip + dyDip;
-
-        var screen = Forms.Screen.FromPoint(currentMousePx);
-        var boundsPx = screen.Bounds;
-
-        double windowWidthPx = ActualWidth * scaleX;
-        double windowHeightPx = ActualHeight * scaleY;
-
-        double targetLeftPx = targetLeftDip * scaleX;
-        double targetTopPx = targetTopDip * scaleY;
-
-        double minLeftPx = boundsPx.Left;
-        double maxLeftPx = boundsPx.Right - windowWidthPx;
-
-        double minTopPx = boundsPx.Top;
-        double maxTopPx = boundsPx.Bottom - windowHeightPx;
-
-        double clampedLeftPx = Math.Max(minLeftPx, Math.Min(targetLeftPx, maxLeftPx));
-        double clampedTopPx = Math.Max(minTopPx, Math.Min(targetTopPx, maxTopPx));
-
-        Left = clampedLeftPx / scaleX;
-        Top = clampedTopPx / scaleY;
+        Left = placement.Left;
+        Top = placement.Top;
     }
 
     private void Overlay_MouseLeftButtonUp(object sender, WpfMouseButtonEventArgs e)
@@ -677,7 +667,7 @@ public partial class MainWindow : Window
 
     private void SystemEvents_SessionEnding(object sender, SessionEndingEventArgs e)
     {
-        DispatcherInvocation.TryInvoke(Dispatcher, HandleSessionEnding, DispatcherPriority.Send);
+        DispatcherInvocation.TryInvoke(Dispatcher, TryHandleSessionEnding, DispatcherPriority.Send);
     }
 
     private void HandleSessionEnding()
@@ -685,6 +675,18 @@ public partial class MainWindow : Window
         _allowExit = true;
         FlushPendingConfigurationSave();
         _trayMenuService?.HideIcon();
+    }
+
+    private void TryHandleSessionEnding()
+    {
+        try
+        {
+            HandleSessionEnding();
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"Session ending cleanup failed: {ex}");
+        }
     }
 
     private void Window_Closed(object? sender, EventArgs e)

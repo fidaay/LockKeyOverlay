@@ -73,7 +73,7 @@ internal sealed class KeyboardHookService : IDisposable
                 KbdLlHookStruct keyInfo = Marshal.PtrToStructure<KbdLlHookStruct>(lParam);
 
                 if (keyInfo.vkCode == VK_NUMLOCK)
-                    NumLockReleased?.Invoke(this, EventArgs.Empty);
+                    EventInvocation.Raise(NumLockReleased, this, EventArgs.Empty);
             }
         }
 

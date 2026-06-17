@@ -22,6 +22,11 @@ internal readonly record struct ScreenSnapshot(
 
 internal readonly record struct WindowPlacement(double Left, double Top);
 
+internal readonly record struct WindowPositionSnapshot(
+    ScreenSnapshot Screen,
+    Point TopLeftPx,
+    DpiScale Scale);
+
 internal sealed class ScreenPlacementService
 {
     private readonly Func<ScreenSnapshot, DpiScale?> _dpiScaleProvider;
@@ -88,15 +93,138 @@ internal sealed class ScreenPlacementService
         return new WindowPlacement(leftPx / scale.ScaleX, topPx / scale.ScaleY);
     }
 
+    public WindowPositionSnapshot? CaptureWindowPosition(
+        double leftDip,
+        double topDip,
+        IReadOnlyList<ScreenSnapshot> screens,
+        ScreenSnapshot? fallbackScreen,
+        DpiScale fallbackScale)
+    {
+        if (screens.Count == 0)
+            return null;
+
+        DpiScale initialScale = EnsureValid(fallbackScale);
+        ScreenSnapshot targetScreen =
+            FindScreenForDipPoint(screens, leftDip, topDip, initialScale)
+            ?? fallbackScreen
+            ?? screens[0];
+        DpiScale targetScale = GetDpiScale(targetScreen, initialScale);
+        Point topLeftPx = ToPhysicalPoint(leftDip, topDip, targetScale);
+
+        return new WindowPositionSnapshot(targetScreen, topLeftPx, targetScale);
+    }
+
+    public WindowPlacement MoveWindowByPhysicalDelta(
+        Point startTopLeftPx,
+        Point startMousePx,
+        Point currentMousePx,
+        IReadOnlyList<ScreenSnapshot> screens,
+        ScreenSnapshot? fallbackScreen,
+        DpiScale fallbackScale,
+        double windowWidthDip,
+        double windowHeightDip)
+    {
+        DpiScale initialScale = EnsureValid(fallbackScale);
+
+        Point desiredTopLeftPx = new(
+            startTopLeftPx.X + currentMousePx.X - startMousePx.X,
+            startTopLeftPx.Y + currentMousePx.Y - startMousePx.Y);
+
+        ScreenSnapshot? targetScreen = FindScreenForPhysicalPoint(screens, currentMousePx, fallbackScreen);
+        if (targetScreen is null)
+            return new WindowPlacement(desiredTopLeftPx.X / initialScale.ScaleX, desiredTopLeftPx.Y / initialScale.ScaleY);
+
+        return PlaceWindowFromPhysicalPosition(
+            desiredTopLeftPx,
+            targetScreen.Value,
+            initialScale,
+            windowWidthDip,
+            windowHeightDip);
+    }
+
+    public WindowPlacement PlaceWindowFromPhysicalPosition(
+        Point desiredTopLeftPx,
+        ScreenSnapshot targetScreen,
+        DpiScale fallbackScale,
+        double windowWidthDip,
+        double windowHeightDip)
+    {
+        DpiScale targetScale = GetDpiScale(targetScreen, fallbackScale);
+
+        return ClampToBounds(
+            desiredTopLeftPx.X,
+            desiredTopLeftPx.Y,
+            windowWidthDip,
+            windowHeightDip,
+            targetScreen.Bounds,
+            targetScale);
+    }
+
+    public static ScreenSnapshot? FindScreenForPhysicalPoint(
+        IReadOnlyList<ScreenSnapshot> screens,
+        Point point,
+        ScreenSnapshot? fallbackScreen = null)
+    {
+        return FindScreenContainingPoint(screens, point)
+            ?? FindNearestScreen(screens, point)
+            ?? fallbackScreen;
+    }
+
     private DpiScale GetDpiScale(ScreenSnapshot screen, DpiScale fallbackScale)
     {
-        DpiScale? dpiScale = _dpiScaleProvider(screen);
-        return EnsureValid(dpiScale ?? fallbackScale);
+        try
+        {
+            DpiScale? dpiScale = _dpiScaleProvider(screen);
+            return EnsureValid(dpiScale ?? fallbackScale);
+        }
+        catch (Exception ex) when (IsExpectedDpiFallbackException(ex))
+        {
+            return EnsureValid(fallbackScale);
+        }
     }
 
     private static DpiScale EnsureValid(DpiScale scale)
     {
         return scale.IsValid ? scale : DpiScale.One;
+    }
+
+    private ScreenSnapshot? FindScreenForDipPoint(
+        IReadOnlyList<ScreenSnapshot> screens,
+        double leftDip,
+        double topDip,
+        DpiScale fallbackScale)
+    {
+        ScreenSnapshot? best = null;
+        double bestScore = double.MaxValue;
+        DpiScale preferredScale = EnsureValid(fallbackScale);
+
+        foreach (ScreenSnapshot screen in screens)
+        {
+            DpiScale scale = GetDpiScale(screen, preferredScale);
+            Point point = ToPhysicalPoint(leftDip, topDip, scale);
+
+            if (!screen.Bounds.Contains(point))
+                continue;
+
+            double score = Math.Abs(scale.ScaleX - preferredScale.ScaleX) + Math.Abs(scale.ScaleY - preferredScale.ScaleY);
+            if (score < bestScore)
+            {
+                best = screen;
+                bestScore = score;
+            }
+        }
+
+        if (best is not null)
+            return best;
+
+        return FindNearestScreen(screens, ToPhysicalPoint(leftDip, topDip, preferredScale));
+    }
+
+    private static Point ToPhysicalPoint(double leftDip, double topDip, DpiScale scale)
+    {
+        return new Point(
+            (int)Math.Round(leftDip * scale.ScaleX),
+            (int)Math.Round(topDip * scale.ScaleY));
     }
 
     private static WindowPlacement ClampToBounds(
@@ -130,6 +258,17 @@ internal sealed class ScreenPlacementService
         foreach (ScreenSnapshot screen in screens)
         {
             if (string.Equals(screen.DeviceName, deviceName, StringComparison.OrdinalIgnoreCase))
+                return screen;
+        }
+
+        return null;
+    }
+
+    private static ScreenSnapshot? FindScreenContainingPoint(IReadOnlyList<ScreenSnapshot> screens, Point point)
+    {
+        foreach (ScreenSnapshot screen in screens)
+        {
+            if (screen.Bounds.Contains(point))
                 return screen;
         }
 
@@ -182,10 +321,19 @@ internal sealed class ScreenPlacementService
             int result = GetDpiForMonitor(monitor, MonitorDpiType.EffectiveDpi, out uint dpiX, out uint dpiY);
             return result == 0 ? DpiScale.FromDpi(dpiX, dpiY) : null;
         }
-        catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException)
+        catch (Exception ex) when (IsExpectedDpiFallbackException(ex))
         {
             return null;
         }
+    }
+
+    private static bool IsExpectedDpiFallbackException(Exception ex)
+    {
+        return ex is DllNotFoundException
+            or EntryPointNotFoundException
+            or COMException
+            or SEHException
+            or UnauthorizedAccessException;
     }
 
     private const uint MONITOR_DEFAULTTONEAREST = 0x00000002;

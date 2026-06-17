@@ -77,6 +77,27 @@ public sealed class ConfigServiceTests
         Assert.IsFalse(File.Exists(service.ConfigFilePath));
     }
 
+    [TestMethod]
+    public void Save_ReplacesMalformedFileAndLeavesNoTemporaryFiles()
+    {
+        ConfigService service = CreateService();
+
+        Directory.CreateDirectory(_tempDirectory!);
+        File.WriteAllText(service.ConfigFilePath, "{ malformed");
+
+        ServiceResult saveResult = service.Save(new AppConfig { Left = 42, Top = 24 });
+        ConfigLoadResult loadResult = service.Load();
+
+        Assert.IsTrue(saveResult.Succeeded, saveResult.DiagnosticMessage);
+        Assert.AreEqual(ConfigLoadStatus.Loaded, loadResult.Status);
+        Assert.IsNotNull(loadResult.Config);
+        Assert.AreEqual(42, loadResult.Config.Left);
+        Assert.AreEqual(24, loadResult.Config.Top);
+        CollectionAssert.AreEqual(
+            Array.Empty<string>(),
+            Directory.GetFiles(_tempDirectory!, $"{ConfigService.ConfigFileName}.*.tmp"));
+    }
+
     private ConfigService CreateService()
     {
         _tempDirectory = Path.Combine(Path.GetTempPath(), "LockKeyOverlay.Tests", Guid.NewGuid().ToString("N"));
