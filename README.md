@@ -22,6 +22,14 @@ The active project is `LockKeyOverlay`. The old `NumLockIndicator` WinForms prot
 
 The tray option `Parpadear backlight ASUS con Num Lock activo` is experimental and only targets the keyboard backlight through ASUS Aura Core / Armoury Crate's `ACPIWMI.dll`. It does not add Caps Lock or Scroll Lock behavior.
 
+To check whether Windows exposes per-key RGB control through Dynamic Lighting / LampArray, run:
+
+```powershell
+.\scripts\diagnose-lamparray.ps1
+```
+
+If the diagnostic reports no LampArray devices, Num Lock-only RGB blinking is not available through the Windows per-key lighting API on that machine.
+
 ## Publish
 
 ```powershell
