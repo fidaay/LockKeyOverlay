@@ -295,6 +295,26 @@ public partial class MainWindow : Window
             FlushPendingConfigurationSave();
     }
 
+    internal void ExitFromExternalShutdown()
+    {
+        if (!Dispatcher.CheckAccess())
+        {
+            DispatcherInvocation.TryBeginInvoke(Dispatcher, ExitFromExternalShutdown);
+            return;
+        }
+
+        if (Dispatcher.HasShutdownStarted || Dispatcher.HasShutdownFinished)
+            return;
+
+        _allowExit = true;
+
+        if (IsLoaded)
+            FlushPendingConfigurationSave();
+
+        _trayMenuService?.HideIcon();
+        Close();
+    }
+
     private void ConfirmAndResetConfiguration()
     {
         var result = Forms.MessageBox.Show(

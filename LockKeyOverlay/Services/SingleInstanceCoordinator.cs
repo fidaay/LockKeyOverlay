@@ -6,10 +6,13 @@ internal sealed class SingleInstanceCoordinator : IDisposable
 
     private readonly string _mutexName;
     private readonly string _activationEventName;
+    private readonly string _shutdownEventName;
 
     private Mutex? _mutex;
     private EventWaitHandle? _activationEvent;
-    private RegisteredWaitHandle? _registeredWaitHandle;
+    private EventWaitHandle? _shutdownEvent;
+    private RegisteredWaitHandle? _activationRegisteredWaitHandle;
+    private RegisteredWaitHandle? _shutdownRegisteredWaitHandle;
     private bool _ownsMutex;
     private bool _disposed;
 
@@ -19,9 +22,11 @@ internal sealed class SingleInstanceCoordinator : IDisposable
 
         _mutexName = $"{namePrefix}.Mutex";
         _activationEventName = $"{namePrefix}.Activation";
+        _shutdownEventName = $"{namePrefix}.Shutdown";
     }
 
     public event EventHandler? ActivationRequested;
+    public event EventHandler? ShutdownRequested;
 
     public static SingleInstanceCoordinator CreateDefault()
     {
@@ -36,12 +41,15 @@ internal sealed class SingleInstanceCoordinator : IDisposable
             return _ownsMutex;
 
         _activationEvent = new EventWaitHandle(false, EventResetMode.AutoReset, _activationEventName);
+        _shutdownEvent = new EventWaitHandle(false, EventResetMode.AutoReset, _shutdownEventName);
         _mutex = new Mutex(initiallyOwned: true, _mutexName, out bool createdNew);
 
         if (!createdNew)
         {
             _activationEvent.Dispose();
             _activationEvent = null;
+            _shutdownEvent.Dispose();
+            _shutdownEvent = null;
             return false;
         }
 
@@ -53,12 +61,46 @@ internal sealed class SingleInstanceCoordinator : IDisposable
     {
         ThrowIfDisposed();
 
+        return SignalEvent(_activationEventName);
+    }
+
+    public bool SignalPrimaryShutdown()
+    {
+        ThrowIfDisposed();
+
+        return SignalEvent(_shutdownEventName);
+    }
+
+    public bool WaitForPrimaryExit(TimeSpan timeout)
+    {
+        ThrowIfDisposed();
+
         try
         {
-            using EventWaitHandle activationEvent = EventWaitHandle.OpenExisting(_activationEventName);
-            return activationEvent.Set();
+            using Mutex mutex = Mutex.OpenExisting(_mutexName);
+            bool acquired = false;
+
+            try
+            {
+                acquired = mutex.WaitOne(timeout);
+                return acquired;
+            }
+            catch (AbandonedMutexException)
+            {
+                acquired = true;
+                return true;
+            }
+            finally
+            {
+                if (acquired)
+                    mutex.ReleaseMutex();
+            }
         }
-        catch (Exception ex) when (ex is WaitHandleCannotBeOpenedException or UnauthorizedAccessException)
+        catch (WaitHandleCannotBeOpenedException)
+        {
+            return true;
+        }
+        catch (UnauthorizedAccessException)
         {
             return false;
         }
@@ -68,15 +110,22 @@ internal sealed class SingleInstanceCoordinator : IDisposable
     {
         ThrowIfDisposed();
 
-        if (!_ownsMutex || _activationEvent is null)
+        if (!_ownsMutex || _activationEvent is null || _shutdownEvent is null)
             return false;
 
-        if (_registeredWaitHandle is not null)
+        if (_activationRegisteredWaitHandle is not null && _shutdownRegisteredWaitHandle is not null)
             return true;
 
-        _registeredWaitHandle = ThreadPool.RegisterWaitForSingleObject(
+        _activationRegisteredWaitHandle ??= ThreadPool.RegisterWaitForSingleObject(
             _activationEvent,
             ActivationCallback,
+            state: null,
+            Timeout.InfiniteTimeSpan,
+            executeOnlyOnce: false);
+
+        _shutdownRegisteredWaitHandle ??= ThreadPool.RegisterWaitForSingleObject(
+            _shutdownEvent,
+            ShutdownCallback,
             state: null,
             Timeout.InfiniteTimeSpan,
             executeOnlyOnce: false);
@@ -91,11 +140,17 @@ internal sealed class SingleInstanceCoordinator : IDisposable
 
         _disposed = true;
 
-        _registeredWaitHandle?.Unregister(null);
-        _registeredWaitHandle = null;
+        _activationRegisteredWaitHandle?.Unregister(null);
+        _activationRegisteredWaitHandle = null;
+
+        _shutdownRegisteredWaitHandle?.Unregister(null);
+        _shutdownRegisteredWaitHandle = null;
 
         _activationEvent?.Dispose();
         _activationEvent = null;
+
+        _shutdownEvent?.Dispose();
+        _shutdownEvent = null;
 
         if (_ownsMutex)
         {
@@ -113,12 +168,33 @@ internal sealed class SingleInstanceCoordinator : IDisposable
         _ownsMutex = false;
     }
 
+    private static bool SignalEvent(string eventName)
+    {
+        try
+        {
+            using EventWaitHandle targetEvent = EventWaitHandle.OpenExisting(eventName);
+            return targetEvent.Set();
+        }
+        catch (Exception ex) when (ex is WaitHandleCannotBeOpenedException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
     private void ActivationCallback(object? state, bool timedOut)
     {
         if (timedOut || _disposed)
             return;
 
         EventInvocation.Raise(ActivationRequested, this, EventArgs.Empty);
+    }
+
+    private void ShutdownCallback(object? state, bool timedOut)
+    {
+        if (timedOut || _disposed)
+            return;
+
+        EventInvocation.Raise(ShutdownRequested, this, EventArgs.Empty);
     }
 
     private void ThrowIfDisposed()

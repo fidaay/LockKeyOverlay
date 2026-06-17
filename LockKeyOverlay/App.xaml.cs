@@ -12,6 +12,19 @@ public partial class App : System.Windows.Application
     {
         base.OnStartup(e);
 
+        AppStartupOptions startupOptions = AppStartupOptions.Parse(e.Args);
+
+        if (startupOptions.ShutdownExisting)
+        {
+            using SingleInstanceCoordinator shutdownCoordinator = SingleInstanceCoordinator.CreateDefault();
+            shutdownCoordinator.SignalPrimaryShutdown();
+            if (!shutdownCoordinator.WaitForPrimaryExit(TimeSpan.FromSeconds(10)))
+                Debug.WriteLine("Existing LockKeyOverlay instance did not exit before timeout.");
+
+            Shutdown();
+            return;
+        }
+
         _singleInstanceCoordinator = SingleInstanceCoordinator.CreateDefault();
 
         if (!_singleInstanceCoordinator.TryClaimPrimary())
@@ -28,6 +41,7 @@ public partial class App : System.Windows.Application
         _mainWindow.Show();
 
         _singleInstanceCoordinator.ActivationRequested += SingleInstanceCoordinator_ActivationRequested;
+        _singleInstanceCoordinator.ShutdownRequested += SingleInstanceCoordinator_ShutdownRequested;
         if (!_singleInstanceCoordinator.StartListening())
             Debug.WriteLine("Single-instance activation listener could not be started.");
     }
@@ -37,6 +51,7 @@ public partial class App : System.Windows.Application
         if (_singleInstanceCoordinator is not null)
         {
             _singleInstanceCoordinator.ActivationRequested -= SingleInstanceCoordinator_ActivationRequested;
+            _singleInstanceCoordinator.ShutdownRequested -= SingleInstanceCoordinator_ShutdownRequested;
             _singleInstanceCoordinator.Dispose();
             _singleInstanceCoordinator = null;
         }
@@ -47,5 +62,10 @@ public partial class App : System.Windows.Application
     private void SingleInstanceCoordinator_ActivationRequested(object? sender, EventArgs e)
     {
         DispatcherInvocation.TryBeginInvoke(Dispatcher, () => _mainWindow?.ShowFromExternalActivation());
+    }
+
+    private void SingleInstanceCoordinator_ShutdownRequested(object? sender, EventArgs e)
+    {
+        DispatcherInvocation.TryBeginInvoke(Dispatcher, () => _mainWindow?.ExitFromExternalShutdown());
     }
 }
