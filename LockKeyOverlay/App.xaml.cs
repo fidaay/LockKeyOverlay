@@ -36,7 +36,9 @@ public partial class App : System.Windows.Application
             return;
         }
 
-        _mainWindow = new MainWindow();
+        ConfigLoadResult startupConfigLoadResult = new ConfigService().Load();
+
+        _mainWindow = new MainWindow(startupConfigLoadResult);
         MainWindow = _mainWindow;
         _mainWindow.Show();
 

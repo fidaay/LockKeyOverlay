@@ -35,10 +35,12 @@ public partial class MainWindow : Window
 
     private WindowInteropService? _windowInteropService;
     private TrayMenuService? _trayMenuService;
+    private ConfigLoadResult? _startupConfigLoadResult;
 
     private IntPtr _windowHandle = IntPtr.Zero;
     private bool _allowExit;
     private bool _movementEnabled = true;
+    private bool _runAtStartupEnabledForConfig;
     private bool _isDragging;
     private bool _suppressConfigSave;
 
@@ -52,8 +54,18 @@ public partial class MainWindow : Window
     private RgbaStyle _inactiveStyle = DefaultInactiveStyle;
 
     public MainWindow()
+        : this(null)
     {
+    }
+
+    internal MainWindow(ConfigLoadResult? startupConfigLoadResult)
+    {
+        _startupConfigLoadResult = startupConfigLoadResult;
+
         InitializeComponent();
+
+        if (!StartupWindowVisibility.ShouldShowOnStartup(startupConfigLoadResult))
+            Opacity = 0;
 
         _asusAuraBacklightBlinkService = new AsusAuraBacklightBlinkService(
             new Win32NumLockStateReader(),
@@ -118,7 +130,10 @@ public partial class MainWindow : Window
 
         bool configLoaded = LoadConfiguration();
         if (!configLoaded)
+        {
             CenterOverlayOnPrimaryScreen();
+            Opacity = 1;
+        }
 
         Cursor = _movementEnabled ? WpfCursors.SizeAll : WpfCursors.Arrow;
         UpdateNumLockIndicator();
@@ -182,10 +197,14 @@ public partial class MainWindow : Window
 
     private void ConfigureTray()
     {
-        ServiceResult<bool> startupState = _startupService.IsEnabled();
+        ServiceResult<StartupRegistrationState> startupState = _startupService.GetRegistrationState();
         ReportNonFatalIssue(startupState.ToServiceResult());
 
-        _trayMenuService = new TrayMenuService(startupState.Value, LoadTrayIcon());
+        _runAtStartupEnabledForConfig = StartupConfigurationValue.ResolveFromRegistryState(
+            startupState,
+            fallback: false);
+
+        _trayMenuService = new TrayMenuService(_runAtStartupEnabledForConfig, LoadTrayIcon());
         _trayMenuService.VisibleChanged += (_, _) => ApplyVisibilityFromTray();
         _trayMenuService.MovementChanged += (_, _) => ApplyMovementFromTray();
         _trayMenuService.TopMostChanged += (_, _) =>
@@ -248,6 +267,7 @@ public partial class MainWindow : Window
 
         if (_trayMenuService.IsVisibleChecked)
         {
+            Opacity = 1;
             Show();
             ApplyTopMostState();
         }
@@ -285,6 +305,7 @@ public partial class MainWindow : Window
             return;
         }
 
+        _runAtStartupEnabledForConfig = requestedState;
         RequestSaveConfiguration();
     }
 
@@ -316,6 +337,8 @@ public partial class MainWindow : Window
             return;
 
         _trayMenuService?.SetVisibleCheckedSilently(true);
+
+        Opacity = 1;
 
         if (!IsVisible)
             Show();
@@ -550,7 +573,7 @@ public partial class MainWindow : Window
             IsVisible = IsVisible,
             MovementEnabled = _trayMenuService?.MovementEnabled ?? _movementEnabled,
             TopMostEnabled = _trayMenuService?.TopMostEnabled ?? Topmost,
-            RunAtStartupEnabled = _trayMenuService?.RunAtStartupEnabled ?? false,
+            RunAtStartupEnabled = _runAtStartupEnabledForConfig,
             AsusAuraBacklightBlinkWhenNumLockOnEnabled =
                 _trayMenuService?.AsusAuraBacklightBlinkWhenNumLockOnEnabled ?? _asusAuraBacklightBlinkService.Enabled,
             Active = RgbaConfig.FromStyle(_activeStyle),
@@ -563,7 +586,8 @@ public partial class MainWindow : Window
 
     private bool LoadConfiguration()
     {
-        ConfigLoadResult result = _configService.Load();
+        ConfigLoadResult result = _startupConfigLoadResult ?? _configService.Load();
+        _startupConfigLoadResult = null;
 
         if (result.Status == ConfigLoadStatus.NotFound)
             return false;
@@ -618,10 +642,20 @@ public partial class MainWindow : Window
         ApplyClickThroughState();
         ApplyTopMostState();
 
-        if (config.IsVisible)
+        ApplyConfiguredVisibility(config.IsVisible);
+    }
+
+    private void ApplyConfiguredVisibility(bool isVisible)
+    {
+        if (isVisible)
+        {
+            Opacity = 1;
             Show();
-        else
-            Hide();
+            return;
+        }
+
+        Hide();
+        Opacity = 1;
     }
 
     private void SynchronizeStartupRegistration(AppConfig config)
@@ -631,6 +665,9 @@ public partial class MainWindow : Window
 
         ServiceResult<StartupRegistrationState> startupStateResult = _startupService.GetRegistrationState();
         ReportNonFatalIssue(startupStateResult.ToServiceResult());
+        _runAtStartupEnabledForConfig = StartupConfigurationValue.ResolveFromRegistryState(
+            startupStateResult,
+            fallback: config.RunAtStartupEnabled);
 
         if (!startupStateResult.Succeeded)
             return;
@@ -645,7 +682,10 @@ public partial class MainWindow : Window
         ReportNonFatalIssue(repairResult);
 
         if (repairResult.Succeeded)
+        {
             _trayMenuService.SetRunAtStartupEnabledSilently(true);
+            _runAtStartupEnabledForConfig = true;
+        }
     }
 
     private static string GetCurrentExecutableFileName()
@@ -677,8 +717,12 @@ public partial class MainWindow : Window
             ServiceResult startupResetResult = DefaultConfigurationStartupReset.DisableRunAtStartup(
                 _startupService.SetEnabled,
                 enabled => _trayMenuService?.SetRunAtStartupEnabledSilently(enabled));
+            if (startupResetResult.Succeeded)
+                _runAtStartupEnabledForConfig = false;
+
             ReportNonFatalIssue(startupResetResult, showDialog: !startupResetResult.Succeeded);
 
+            Opacity = 1;
             Show();
         }
         finally

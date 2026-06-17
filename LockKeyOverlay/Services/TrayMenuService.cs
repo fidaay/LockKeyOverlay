@@ -5,6 +5,9 @@ namespace LockKeyOverlay;
 
 internal sealed class TrayMenuService : IDisposable
 {
+    internal const string VisibleMenuText = "Mostrar overlay";
+    internal const string RunAtStartupMenuText = "Abrir al iniciar Windows";
+
     private readonly Forms.ContextMenuStrip _trayMenu;
     private readonly Forms.NotifyIcon _trayIcon;
     private readonly Drawing.Icon? _ownedIcon;
@@ -21,10 +24,10 @@ internal sealed class TrayMenuService : IDisposable
         _ownedIcon = icon;
         _trayMenu = new Forms.ContextMenuStrip();
 
-        _visibleMenuItem = CreateCheckedItem("Ventana visible", checkedState: true);
+        _visibleMenuItem = CreateCheckedItem(VisibleMenuText, checkedState: true);
         _movementMenuItem = CreateCheckedItem("Activar movimiento", checkedState: true);
         _topMostMenuItem = CreateCheckedItem("Siempre encima", checkedState: true);
-        _runAtStartupMenuItem = CreateCheckedItem("Iniciar con Windows", runAtStartupEnabled);
+        _runAtStartupMenuItem = CreateCheckedItem(RunAtStartupMenuText, runAtStartupEnabled);
         _asusAuraBacklightBlinkMenuItem = CreateCheckedItem("Parpadear backlight ASUS con Num Lock activo", checkedState: false);
 
         Forms.ToolStripMenuItem resetConfigMenuItem = new("Eliminar configuración...");
