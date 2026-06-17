@@ -30,6 +30,7 @@ public partial class MainWindow : Window
     private readonly KeyboardHookService _keyboardHookService = new();
     private readonly ForegroundHookService _foregroundHookService = new();
     private readonly ScreenPlacementService _screenPlacementService = new();
+    private readonly StartupConfigurationState _startupConfigurationState = new();
     private readonly AsusAuraBacklightBlinkService _asusAuraBacklightBlinkService;
     private readonly DispatcherTimer _configSaveDebounceTimer;
 
@@ -40,7 +41,7 @@ public partial class MainWindow : Window
     private IntPtr _windowHandle = IntPtr.Zero;
     private bool _allowExit;
     private bool _movementEnabled = true;
-    private bool _runAtStartupEnabledForConfig;
+    private bool _hiddenStartupClickThroughPending;
     private bool _isDragging;
     private bool _suppressConfigSave;
 
@@ -64,7 +65,8 @@ public partial class MainWindow : Window
 
         InitializeComponent();
 
-        if (!StartupWindowVisibility.ShouldShowOnStartup(startupConfigLoadResult))
+        _hiddenStartupClickThroughPending = !StartupWindowVisibility.ShouldShowOnStartup(startupConfigLoadResult);
+        if (_hiddenStartupClickThroughPending)
             Opacity = 0;
 
         _asusAuraBacklightBlinkService = new AsusAuraBacklightBlinkService(
@@ -132,7 +134,9 @@ public partial class MainWindow : Window
         if (!configLoaded)
         {
             CenterOverlayOnPrimaryScreen();
+            _hiddenStartupClickThroughPending = false;
             Opacity = 1;
+            ApplyClickThroughState();
         }
 
         Cursor = _movementEnabled ? WpfCursors.SizeAll : WpfCursors.Arrow;
@@ -200,11 +204,11 @@ public partial class MainWindow : Window
         ServiceResult<StartupRegistrationState> startupState = _startupService.GetRegistrationState();
         ReportNonFatalIssue(startupState.ToServiceResult());
 
-        _runAtStartupEnabledForConfig = StartupConfigurationValue.ResolveFromRegistryState(
+        _startupConfigurationState.ApplyRegistryState(
             startupState,
             fallback: false);
 
-        _trayMenuService = new TrayMenuService(_runAtStartupEnabledForConfig, LoadTrayIcon());
+        _trayMenuService = new TrayMenuService(_startupConfigurationState.Value, LoadTrayIcon());
         _trayMenuService.VisibleChanged += (_, _) => ApplyVisibilityFromTray();
         _trayMenuService.MovementChanged += (_, _) => ApplyMovementFromTray();
         _trayMenuService.TopMostChanged += (_, _) =>
@@ -267,8 +271,10 @@ public partial class MainWindow : Window
 
         if (_trayMenuService.IsVisibleChecked)
         {
+            _hiddenStartupClickThroughPending = false;
             Opacity = 1;
             Show();
+            ApplyClickThroughState();
             ApplyTopMostState();
         }
         else
@@ -305,7 +311,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        _runAtStartupEnabledForConfig = requestedState;
+        _startupConfigurationState.SetTrusted(requestedState);
         RequestSaveConfiguration();
     }
 
@@ -338,11 +344,13 @@ public partial class MainWindow : Window
 
         _trayMenuService?.SetVisibleCheckedSilently(true);
 
+        _hiddenStartupClickThroughPending = false;
         Opacity = 1;
 
         if (!IsVisible)
             Show();
 
+        ApplyClickThroughState();
         ApplyTopMostState();
 
         if (IsLoaded)
@@ -573,7 +581,7 @@ public partial class MainWindow : Window
             IsVisible = IsVisible,
             MovementEnabled = _trayMenuService?.MovementEnabled ?? _movementEnabled,
             TopMostEnabled = _trayMenuService?.TopMostEnabled ?? Topmost,
-            RunAtStartupEnabled = _runAtStartupEnabledForConfig,
+            RunAtStartupEnabled = _startupConfigurationState.Value,
             AsusAuraBacklightBlinkWhenNumLockOnEnabled =
                 _trayMenuService?.AsusAuraBacklightBlinkWhenNumLockOnEnabled ?? _asusAuraBacklightBlinkService.Enabled,
             Active = RgbaConfig.FromStyle(_activeStyle),
@@ -639,6 +647,7 @@ public partial class MainWindow : Window
         _movementEnabled = config.MovementEnabled;
         Cursor = _movementEnabled ? WpfCursors.SizeAll : WpfCursors.Arrow;
 
+        _hiddenStartupClickThroughPending = false;
         ApplyClickThroughState();
         ApplyTopMostState();
 
@@ -665,15 +674,15 @@ public partial class MainWindow : Window
 
         ServiceResult<StartupRegistrationState> startupStateResult = _startupService.GetRegistrationState();
         ReportNonFatalIssue(startupStateResult.ToServiceResult());
-        _runAtStartupEnabledForConfig = StartupConfigurationValue.ResolveFromRegistryState(
+        bool startupStateRead = _startupConfigurationState.ApplyRegistryState(
             startupStateResult,
             fallback: config.RunAtStartupEnabled);
+        _trayMenuService.SetRunAtStartupEnabledSilently(_startupConfigurationState.Value);
 
-        if (!startupStateResult.Succeeded)
+        if (!startupStateRead)
             return;
 
         StartupRegistrationState startupState = startupStateResult.Value;
-        _trayMenuService.SetRunAtStartupEnabledSilently(startupState.IsEnabled);
 
         if (!StartupRegistrationRepair.ShouldRepair(config, startupState, GetCurrentExecutableFileName()))
             return;
@@ -683,8 +692,8 @@ public partial class MainWindow : Window
 
         if (repairResult.Succeeded)
         {
+            _startupConfigurationState.SetTrusted(true);
             _trayMenuService.SetRunAtStartupEnabledSilently(true);
-            _runAtStartupEnabledForConfig = true;
         }
     }
 
@@ -718,10 +727,11 @@ public partial class MainWindow : Window
                 _startupService.SetEnabled,
                 enabled => _trayMenuService?.SetRunAtStartupEnabledSilently(enabled));
             if (startupResetResult.Succeeded)
-                _runAtStartupEnabledForConfig = false;
+                _startupConfigurationState.SetTrusted(false);
 
             ReportNonFatalIssue(startupResetResult, showDialog: !startupResetResult.Succeeded);
 
+            _hiddenStartupClickThroughPending = false;
             Opacity = 1;
             Show();
         }
@@ -791,7 +801,10 @@ public partial class MainWindow : Window
         if (_windowInteropService is null)
             return;
 
-        ServiceResult result = _windowInteropService.ApplyClickThrough(!_movementEnabled);
+        ServiceResult result = _windowInteropService.ApplyClickThrough(
+            OverlayClickThroughState.ShouldApplyClickThrough(
+                _hiddenStartupClickThroughPending,
+                _movementEnabled));
         ReportNonFatalIssue(result);
     }
 
