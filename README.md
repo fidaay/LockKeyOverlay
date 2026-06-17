@@ -7,7 +7,7 @@ LockKeyOverlay is a small Windows desktop utility that shows a movable Num Lock 
 - Windows 10/11 x64.
 - .NET SDK 10.0.301 for development.
 - Microsoft Windows Desktop Runtime 10 x64 on target machines.
-- Inno Setup with `ISCC.exe` available on `PATH` to build the installer.
+- Inno Setup to build the installer. The packaging script autodetects common Inno Setup install paths and also accepts a manual `ISCC.exe` path.
 
 ## Development
 
@@ -34,6 +34,12 @@ artifacts\publish\LockKeyOverlay
 
 ```powershell
 .\scripts\package-installer.ps1
+```
+
+If Inno Setup is installed somewhere custom, pass the compiler path:
+
+```powershell
+.\scripts\package-installer.ps1 -InnoCompiler "C:\Path\To\ISCC.exe"
 ```
 
 The installer output is written to:
