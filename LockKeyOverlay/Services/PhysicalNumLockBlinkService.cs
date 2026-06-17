@@ -6,18 +6,17 @@ namespace LockKeyOverlay;
 internal sealed class PhysicalNumLockBlinkService : IDisposable
 {
     public static readonly TimeSpan BlinkInterval = TimeSpan.FromMilliseconds(1000);
-    public static readonly TimeSpan PulseDuration = TimeSpan.FromMilliseconds(150);
+    public static readonly TimeSpan PulseDuration = TimeSpan.FromMilliseconds(500);
 
-    private readonly ILockKeyHardware _hardware;
+    private readonly INumLockHardware _hardware;
     private readonly IIntervalTimer _blinkTimer;
     private readonly IIntervalTimer _restoreTimer;
 
     private bool _enabled;
     private bool _pulseActive;
     private bool _disposed;
-    private bool _targetStateBeforePulse;
 
-    public PhysicalNumLockBlinkService(ILockKeyHardware hardware, IIntervalTimer blinkTimer, IIntervalTimer restoreTimer)
+    public PhysicalNumLockBlinkService(INumLockHardware hardware, IIntervalTimer blinkTimer, IIntervalTimer restoreTimer)
     {
         _hardware = hardware;
         _blinkTimer = blinkTimer;
@@ -31,22 +30,6 @@ internal sealed class PhysicalNumLockBlinkService : IDisposable
     }
 
     public bool Enabled => _enabled;
-    public PhysicalBlinkTargetKey TargetKey { get; private set; } = PhysicalBlinkTargetKey.CapsLock;
-
-    public ServiceResult SetTargetKey(PhysicalBlinkTargetKey targetKey)
-    {
-        ObjectDisposedException.ThrowIf(_disposed, this);
-
-        if (!Enum.IsDefined(targetKey))
-            return ServiceResult.Failure($"Physical blink target is not supported: {targetKey}.");
-
-        ServiceResult restoreResult = RestoreAfterPulse();
-        if (!restoreResult.Succeeded)
-            return restoreResult;
-
-        TargetKey = targetKey;
-        return ServiceResult.Success("Physical blink target updated.");
-    }
 
     public ServiceResult SetEnabled(bool enabled)
     {
@@ -105,9 +88,7 @@ internal sealed class PhysicalNumLockBlinkService : IDisposable
         if (!_hardware.IsNumLockOn())
             return ServiceResult.Success("Num Lock is off; physical blink skipped.");
 
-        _targetStateBeforePulse = _hardware.IsLockKeyOn(TargetKey);
-
-        ServiceResult toggleResult = _hardware.ToggleLockKey(TargetKey);
+        ServiceResult toggleResult = _hardware.ToggleNumLock();
 
         if (!toggleResult.Succeeded)
             return toggleResult;
@@ -127,10 +108,10 @@ internal sealed class PhysicalNumLockBlinkService : IDisposable
 
         _pulseActive = false;
 
-        if (_hardware.IsLockKeyOn(TargetKey) == _targetStateBeforePulse)
-            return ServiceResult.Success("Physical lock key was already restored.");
+        if (_hardware.IsNumLockOn())
+            return ServiceResult.Success("Num Lock was already restored.");
 
-        return _hardware.ToggleLockKey(TargetKey);
+        return _hardware.ToggleNumLock();
     }
 
     private void BlinkTimer_Tick(object? sender, EventArgs e)
@@ -144,18 +125,10 @@ internal sealed class PhysicalNumLockBlinkService : IDisposable
     }
 }
 
-internal enum PhysicalBlinkTargetKey
-{
-    CapsLock = 0,
-    NumLock = 1,
-    ScrollLock = 2
-}
-
-internal interface ILockKeyHardware
+internal interface INumLockHardware
 {
     bool IsNumLockOn();
-    bool IsLockKeyOn(PhysicalBlinkTargetKey targetKey);
-    ServiceResult ToggleLockKey(PhysicalBlinkTargetKey targetKey);
+    ServiceResult ToggleNumLock();
 }
 
 internal interface IIntervalTimer : IDisposable
@@ -206,53 +179,34 @@ internal sealed class DispatcherIntervalTimer : IIntervalTimer
     }
 }
 
-internal sealed class Win32LockKeyHardware : ILockKeyHardware
+internal sealed class Win32NumLockHardware : INumLockHardware
 {
     private const int INPUT_KEYBOARD = 1;
-    private const ushort VK_CAPITAL = 0x14;
     private const ushort VK_NUMLOCK = 0x90;
-    private const ushort VK_SCROLL = 0x91;
     private const uint KEYEVENTF_EXTENDEDKEY = 0x0001;
     private const uint KEYEVENTF_KEYUP = 0x0002;
 
     public bool IsNumLockOn()
     {
-        return IsLockKeyOn(PhysicalBlinkTargetKey.NumLock);
+        return (GetKeyState(VK_NUMLOCK) & 1) != 0;
     }
 
-    public bool IsLockKeyOn(PhysicalBlinkTargetKey targetKey)
+    public ServiceResult ToggleNumLock()
     {
-        return (GetKeyState(ToVirtualKey(targetKey)) & 1) != 0;
-    }
-
-    public ServiceResult ToggleLockKey(PhysicalBlinkTargetKey targetKey)
-    {
-        ushort virtualKey = ToVirtualKey(targetKey);
         Input[] inputs =
         [
-            CreateKeyboardInput(targetKey, virtualKey, keyUp: false),
-            CreateKeyboardInput(targetKey, virtualKey, keyUp: true)
+            CreateKeyboardInput(keyUp: false),
+            CreateKeyboardInput(keyUp: true)
         ];
 
         uint sent = SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<Input>());
 
         return sent == inputs.Length
-            ? ServiceResult.Success("Physical lock key input sent.")
-            : ServiceResult.Failure("Physical lock key input could not be sent.", nativeErrorCode: Marshal.GetLastWin32Error());
+            ? ServiceResult.Success("Num Lock key input sent.")
+            : ServiceResult.Failure("Num Lock key input could not be sent.", nativeErrorCode: Marshal.GetLastWin32Error());
     }
 
-    private static ushort ToVirtualKey(PhysicalBlinkTargetKey targetKey)
-    {
-        return targetKey switch
-        {
-            PhysicalBlinkTargetKey.CapsLock => VK_CAPITAL,
-            PhysicalBlinkTargetKey.NumLock => VK_NUMLOCK,
-            PhysicalBlinkTargetKey.ScrollLock => VK_SCROLL,
-            _ => throw new ArgumentOutOfRangeException(nameof(targetKey), targetKey, null)
-        };
-    }
-
-    private static Input CreateKeyboardInput(PhysicalBlinkTargetKey targetKey, ushort virtualKey, bool keyUp)
+    private static Input CreateKeyboardInput(bool keyUp)
     {
         return new Input
         {
@@ -261,23 +215,11 @@ internal sealed class Win32LockKeyHardware : ILockKeyHardware
             {
                 Keyboard = new KeyboardInput
                 {
-                    VirtualKey = virtualKey,
-                    Flags = GetKeyEventFlags(targetKey, keyUp)
+                    VirtualKey = VK_NUMLOCK,
+                    Flags = KEYEVENTF_EXTENDEDKEY | (keyUp ? KEYEVENTF_KEYUP : 0)
                 }
             }
         };
-    }
-
-    private static uint GetKeyEventFlags(PhysicalBlinkTargetKey targetKey, bool keyUp)
-    {
-        uint flags = targetKey == PhysicalBlinkTargetKey.NumLock
-            ? KEYEVENTF_EXTENDEDKEY
-            : 0;
-
-        if (keyUp)
-            flags |= KEYEVENTF_KEYUP;
-
-        return flags;
     }
 
     [DllImport("user32.dll")]

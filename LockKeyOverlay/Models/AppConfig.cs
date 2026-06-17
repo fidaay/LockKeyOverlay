@@ -14,7 +14,6 @@ internal sealed class AppConfig
     public bool TopMostEnabled { get; set; } = true;
     public bool RunAtStartupEnabled { get; set; }
     public bool PhysicalNumLockBlinkWhenOnEnabled { get; set; }
-    public PhysicalBlinkTargetKey PhysicalBlinkTargetKey { get; set; } = PhysicalBlinkTargetKey.CapsLock;
 
     public RgbaConfig? Active { get; set; }
     public RgbaConfig? Inactive { get; set; }

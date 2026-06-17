@@ -28,7 +28,6 @@ public sealed class ConfigServiceTests
             TopMostEnabled = true,
             RunAtStartupEnabled = true,
             PhysicalNumLockBlinkWhenOnEnabled = true,
-            PhysicalBlinkTargetKey = PhysicalBlinkTargetKey.ScrollLock,
             Active = new RgbaConfig { R = 255, G = 140, B = 0, A = 217 },
             Inactive = new RgbaConfig { R = 30, G = 144, B = 255, A = 191 }
         };
@@ -51,7 +50,6 @@ public sealed class ConfigServiceTests
         Assert.AreEqual(
             expected.PhysicalNumLockBlinkWhenOnEnabled,
             loadResult.Config.PhysicalNumLockBlinkWhenOnEnabled);
-        Assert.AreEqual(expected.PhysicalBlinkTargetKey, loadResult.Config.PhysicalBlinkTargetKey);
         Assert.AreEqual(expected.Active!.ToStyle(), loadResult.Config.Active!.ToStyle());
         Assert.AreEqual(expected.Inactive!.ToStyle(), loadResult.Config.Inactive!.ToStyle());
     }
@@ -78,7 +76,6 @@ public sealed class ConfigServiceTests
         Assert.AreEqual(ConfigLoadStatus.Loaded, result.Status);
         Assert.IsNotNull(result.Config);
         Assert.IsFalse(result.Config.PhysicalNumLockBlinkWhenOnEnabled);
-        Assert.AreEqual(PhysicalBlinkTargetKey.CapsLock, result.Config.PhysicalBlinkTargetKey);
     }
 
     [TestMethod]
