@@ -1,3 +1,4 @@
 <Solution>
   <Project Path="LockKeyOverlay/LockKeyOverlay.csproj" />
+  <Project Path="LockKeyOverlay.Tests/LockKeyOverlay.Tests.csproj" />
 </Solution>

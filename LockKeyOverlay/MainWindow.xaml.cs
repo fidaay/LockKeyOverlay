@@ -1,1078 +1,717 @@
-﻿using Microsoft.Win32;
+using System.ComponentModel;
+using System.Diagnostics;
 using System.IO;
-using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
-using System.Text.Json;
-using Forms = System.Windows.Forms;
 using Drawing = System.Drawing;
-
-using WpfColor = System.Windows.Media.Color;
+using Forms = System.Windows.Forms;
 using WpfBrushes = System.Windows.Media.Brushes;
+using WpfColor = System.Windows.Media.Color;
 using WpfCursors = System.Windows.Input.Cursors;
-using WpfMouseEventArgs = System.Windows.Input.MouseEventArgs;
 using WpfMouseButtonEventArgs = System.Windows.Input.MouseButtonEventArgs;
+using WpfMouseEventArgs = System.Windows.Input.MouseEventArgs;
 
-namespace LockKeyOverlay
+namespace LockKeyOverlay;
+
+public partial class MainWindow : Window
 {
-    public partial class MainWindow : Window
+    private const int ConfigSaveDebounceMs = 250;
+
+    private static readonly RgbaStyle DefaultActiveStyle = RgbaStyle.FromOpacity(255, 140, 0, 0.85);
+    private static readonly RgbaStyle DefaultInactiveStyle = RgbaStyle.FromOpacity(30, 144, 255, 0.75);
+
+    private readonly ConfigService _configService = new();
+    private readonly StartupService _startupService = new();
+    private readonly KeyboardHookService _keyboardHookService = new();
+    private readonly ForegroundHookService _foregroundHookService = new();
+    private readonly DispatcherTimer _configSaveDebounceTimer;
+
+    private WindowInteropService? _windowInteropService;
+    private TrayMenuService? _trayMenuService;
+
+    private IntPtr _windowHandle = IntPtr.Zero;
+    private bool _allowExit;
+    private bool _movementEnabled = true;
+    private bool _isDragging;
+    private bool _suppressConfigSave;
+
+    private Drawing.Point _dragStartMousePx;
+    private double _dragStartLeftDip;
+    private double _dragStartTopDip;
+
+    private BitmapImage? _numLockOnIcon;
+    private BitmapImage? _numLockOffIcon;
+
+    private RgbaStyle _activeStyle = DefaultActiveStyle;
+    private RgbaStyle _inactiveStyle = DefaultInactiveStyle;
+
+    public MainWindow()
     {
-        // ---- Win32: teclado ----
-        [DllImport("user32.dll")]
-        private static extern short GetKeyState(int nVirtKey);
+        InitializeComponent();
 
-        private delegate IntPtr LowLevelKeyboardProc(int nCode, IntPtr wParam, IntPtr lParam);
-
-        [DllImport("user32.dll", SetLastError = true)]
-        private static extern IntPtr SetWindowsHookEx(int idHook, LowLevelKeyboardProc lpfn, IntPtr hMod, uint dwThreadId);
-
-        [DllImport("user32.dll", SetLastError = true)]
-        [return: MarshalAs(UnmanagedType.Bool)]
-        private static extern bool UnhookWindowsHookEx(IntPtr hhk);
-
-        [DllImport("user32.dll")]
-        private static extern IntPtr CallNextHookEx(IntPtr hhk, int nCode, IntPtr wParam, IntPtr lParam);
-
-        [DllImport("kernel32.dll", CharSet = CharSet.Auto)]
-        private static extern IntPtr GetModuleHandle(string? lpModuleName);
-
-        [StructLayout(LayoutKind.Sequential)]
-        private struct KbdLlHookStruct
+        _configSaveDebounceTimer = new DispatcherTimer
         {
-            public int vkCode;
-            public int scanCode;
-            public int flags;
-            public int time;
-            public IntPtr dwExtraInfo;
-        }
+            Interval = TimeSpan.FromMilliseconds(ConfigSaveDebounceMs)
+        };
+        _configSaveDebounceTimer.Tick += ConfigSaveDebounceTimer_Tick;
 
-        private const int VK_NUMLOCK = 0x90;
-        private const int WH_KEYBOARD_LL = 13;
-        private const int WM_KEYUP = 0x0101;
-        private const int WM_SYSKEYUP = 0x0105;
+        _keyboardHookService.NumLockReleased += KeyboardHookService_NumLockReleased;
+        _foregroundHookService.ForegroundChanged += ForegroundHookService_ForegroundChanged;
 
-        // ---- Win32: styles / click-through / toolwindow ----
-        private const int GWL_EXSTYLE = -20;
-        private const int WS_EX_TRANSPARENT = 0x20;
-        private const int WS_EX_TOOLWINDOW = 0x00000080;
+        LocationChanged += Window_LocationChanged;
+        IsVisibleChanged += Window_IsVisibleChanged;
+        Closing += Window_Closing;
+        Closed += Window_Closed;
+    }
 
-        [DllImport("user32.dll", EntryPoint = "GetWindowLong")]
-        private static extern int GetWindowLong32(IntPtr hWnd, int nIndex);
+    protected override void OnSourceInitialized(EventArgs e)
+    {
+        base.OnSourceInitialized(e);
 
-        [DllImport("user32.dll", EntryPoint = "GetWindowLongPtr")]
-        private static extern IntPtr GetWindowLongPtr64(IntPtr hWnd, int nIndex);
+        _windowHandle = new WindowInteropHelper(this).Handle;
+        _windowInteropService = new WindowInteropService(_windowHandle);
 
-        [DllImport("user32.dll", EntryPoint = "SetWindowLong")]
-        private static extern int SetWindowLong32(IntPtr hWnd, int nIndex, int dwNewLong);
+        ReportNonFatalIssue(_windowInteropService.ApplyToolWindowStyle());
+        ApplyClickThroughState();
+        ApplyTopMostState();
+    }
 
-        [DllImport("user32.dll", EntryPoint = "SetWindowLongPtr")]
-        private static extern IntPtr SetWindowLongPtr64(IntPtr hWnd, int nIndex, IntPtr dwNewLong);
+    private void Window_Loaded(object sender, RoutedEventArgs e)
+    {
+        Left = 20;
+        Top = 20;
 
-        private static IntPtr GetWindowLongPtrCompat(IntPtr hWnd, int nIndex)
-            => IntPtr.Size == 8 ? GetWindowLongPtr64(hWnd, nIndex) : new IntPtr(GetWindowLong32(hWnd, nIndex));
-
-        private static IntPtr SetWindowLongPtrCompat(IntPtr hWnd, int nIndex, IntPtr newValue)
-            => IntPtr.Size == 8 ? SetWindowLongPtr64(hWnd, nIndex, newValue) : new IntPtr(SetWindowLong32(hWnd, nIndex, newValue.ToInt32()));
-
-        // ---- Win32: topmost reforzado (incluye taskbar) ----
-        private delegate void WinEventDelegate(
-            IntPtr hWinEventHook,
-            uint eventType,
-            IntPtr hwnd,
-            int idObject,
-            int idChild,
-            uint dwEventThread,
-            uint dwmsEventTime);
-
-        [DllImport("user32.dll")]
-        private static extern IntPtr SetWinEventHook(
-            uint eventMin,
-            uint eventMax,
-            IntPtr hmodWinEventProc,
-            WinEventDelegate lpfnWinEventProc,
-            uint idProcess,
-            uint idThread,
-            uint dwFlags);
-
-        [DllImport("user32.dll")]
-        private static extern bool UnhookWinEvent(IntPtr hWinEventHook);
-
-        [DllImport("user32.dll", SetLastError = true)]
-        private static extern bool SetWindowPos(
-            IntPtr hWnd,
-            IntPtr hWndInsertAfter,
-            int X,
-            int Y,
-            int cx,
-            int cy,
-            uint uFlags);
-
-        // Windows registry para run at startup (HKCU)
-        private const string StartupRunKeyPath = @"Software\Microsoft\Windows\CurrentVersion\Run";
-        private const string StartupValueName = "LockKeyOverlay";
-
-        private const uint EVENT_SYSTEM_FOREGROUND = 0x0003;
-        private const uint WINEVENT_OUTOFCONTEXT = 0x0000;
-        private const uint WINEVENT_SKIPOWNPROCESS = 0x0002;
-
-        private const uint SWP_NOMOVE = 0x0002;
-        private const uint SWP_NOSIZE = 0x0001;
-        private const uint SWP_NOACTIVATE = 0x0010;
-        private const uint SWP_SHOWWINDOW = 0x0040;
-
-        private static readonly IntPtr HWND_TOPMOST = new(-1);
-        private static readonly IntPtr HWND_NOTOPMOST = new(-2);
-
-        // ---- Estado ----
-        private IntPtr windowHandle = IntPtr.Zero;
-
-        private readonly LowLevelKeyboardProc keyboardProc;
-        private IntPtr keyboardHook = IntPtr.Zero;
-
-        private readonly WinEventDelegate foregroundChangedProc;
-        private IntPtr foregroundEventHook = IntPtr.Zero;
-
-        private Forms.NotifyIcon? trayIcon;
-        private Forms.ContextMenuStrip? trayMenu;
-
-        private Forms.ToolStripMenuItem? visibleMenuItem;
-        private Forms.ToolStripMenuItem? movementMenuItem;
-        private Forms.ToolStripMenuItem? topMostMenuItem;
-        private Forms.ToolStripMenuItem? runAtStartupMenuItem;
-        private Forms.ToolStripMenuItem? resetConfigMenuItem;
-
-        private bool suppressConfigSave = false;
-
-        private static readonly RgbaStyle DefaultActiveStyle = RgbaStyle.FromOpacity(255, 140, 0, 0.85);
-        private static readonly RgbaStyle DefaultInactiveStyle = RgbaStyle.FromOpacity(30, 144, 255, 0.75);
-
-        private const string ConfigFolderName = "LockKeyOverlay";
-        private const string ConfigFileName = "settings.json";
-
-        private bool allowExit = false;
-        private bool movementEnabled = true;
-        private bool isDragging = false;
-
-        private const int ConfigSaveDebounceMs = 250;
-        private readonly DispatcherTimer configSaveDebounceTimer;
-
-        private System.Drawing.Point dragStartMousePx;
-        private double dragStartLeftDip;
-        private double dragStartTopDip;
-
-        private BitmapImage? numLockOnIcon;
-        private BitmapImage? numLockOffIcon;
-
-        private RgbaStyle activeStyle = DefaultActiveStyle;
-        private RgbaStyle inactiveStyle = DefaultInactiveStyle;
-
-        public MainWindow()
+        try
         {
-            InitializeComponent();
-
-            keyboardProc = HookCallback;
-            foregroundChangedProc = ForegroundChanged;
-
-            configSaveDebounceTimer = new DispatcherTimer
-            {
-                Interval = TimeSpan.FromMilliseconds(ConfigSaveDebounceMs)
-            };
-            configSaveDebounceTimer.Tick += ConfigSaveDebounceTimer_Tick;
-
-            LocationChanged += Window_LocationChanged;
-            IsVisibleChanged += Window_IsVisibleChanged;
-
-            Closing += Window_Closing;
-            Closed += Window_Closed;
-        }
-
-        protected override void OnSourceInitialized(EventArgs e)
-        {
-            base.OnSourceInitialized(e);
-
-            windowHandle = new WindowInteropHelper(this).Handle;
-
-            // Quitar Alt+Tab (toolwindow)
-            ApplyToolWindowStyle();
-
-            // Estado inicial de click-through según movementEnabled
-            ApplyClickThroughState();
-
-            // Estado inicial topmost reforzado
-            ApplyTopMostState();
-        }
-
-        private void Window_Loaded(object sender, RoutedEventArgs e)
-        {
-            Left = 20;
-            Top = 20;
-
             LoadIndicatorIcons();
-            ConfigureTray();
-            InstallForegroundEventHook();
-            InstallKeyboardHook();
+        }
+        catch (Exception ex) when (ex is IOException or NotSupportedException or UriFormatException)
+        {
+            Forms.MessageBox.Show(
+                $"No se pudieron cargar los iconos de LockKeyOverlay.\n\n{ex.Message}",
+                "LockKeyOverlay",
+                Forms.MessageBoxButtons.OK,
+                Forms.MessageBoxIcon.Error);
 
-            bool configLoaded = LoadConfiguration();
-
-            if (!configLoaded)
-            {
-                CenterOverlayOnPrimaryScreen();
-            }
-
-            Cursor = movementEnabled ? WpfCursors.SizeAll : WpfCursors.Arrow;
-            UpdateNumLockIndicator();
+            _allowExit = true;
+            Close();
+            return;
         }
 
-        // ----------------- UI / visual -----------------
-        private void LoadIndicatorIcons()
+        ConfigureTray();
+        StartHooks();
+
+        bool configLoaded = LoadConfiguration();
+        if (!configLoaded)
+            CenterOverlayOnPrimaryScreen();
+
+        Cursor = _movementEnabled ? WpfCursors.SizeAll : WpfCursors.Arrow;
+        UpdateNumLockIndicator();
+    }
+
+    private void LoadIndicatorIcons()
+    {
+        string assetsDir = Path.Combine(AppContext.BaseDirectory, "Assets");
+
+        string onIconPath = Path.Combine(assetsDir, "lock_closed.png");
+        string offIconPath = Path.Combine(assetsDir, "lock_open.png");
+
+        if (!File.Exists(onIconPath))
+            throw new FileNotFoundException($"No se encontró el archivo: {onIconPath}");
+
+        if (!File.Exists(offIconPath))
+            throw new FileNotFoundException($"No se encontró el archivo: {offIconPath}");
+
+        _numLockOnIcon = LoadBitmap(onIconPath);
+        _numLockOffIcon = LoadBitmap(offIconPath);
+    }
+
+    private static BitmapImage LoadBitmap(string filePath)
+    {
+        BitmapImage bitmap = new();
+        bitmap.BeginInit();
+        bitmap.CacheOption = BitmapCacheOption.OnLoad;
+        bitmap.UriSource = new Uri(filePath, UriKind.Absolute);
+        bitmap.EndInit();
+        bitmap.Freeze();
+        return bitmap;
+    }
+
+    private void ConfigureTray()
+    {
+        ServiceResult<bool> startupState = _startupService.IsEnabled();
+        ReportNonFatalIssue(startupState.ToServiceResult());
+
+        _trayMenuService = new TrayMenuService(startupState.Value);
+        _trayMenuService.VisibleChanged += (_, _) => ApplyVisibilityFromTray();
+        _trayMenuService.MovementChanged += (_, _) => ApplyMovementFromTray();
+        _trayMenuService.TopMostChanged += (_, _) =>
         {
-            string assetsDir = Path.Combine(AppContext.BaseDirectory, "Assets");
-
-            string onIconPath = Path.Combine(assetsDir, "lock_closed.png");
-            string offIconPath = Path.Combine(assetsDir, "lock_open.png");
-
-            if (!File.Exists(onIconPath))
-                throw new FileNotFoundException($"No se encontró el archivo: {onIconPath}");
-
-            if (!File.Exists(offIconPath))
-                throw new FileNotFoundException($"No se encontró el archivo: {offIconPath}");
-
-            numLockOnIcon = LoadBitmap(onIconPath);
-            numLockOffIcon = LoadBitmap(offIconPath);
-        }
-
-        private static BitmapImage LoadBitmap(string filePath)
-        {
-            BitmapImage bitmap = new();
-            bitmap.BeginInit();
-            bitmap.CacheOption = BitmapCacheOption.OnLoad;
-            bitmap.UriSource = new Uri(filePath, UriKind.Absolute);
-            bitmap.EndInit();
-            bitmap.Freeze();
-            return bitmap;
-        }
-
-        private void UpdateNumLockIndicator()
-        {
-            bool numLockOn = IsNumLockOn();
-            ApplyVisualState(numLockOn);
-        }
-
-        private void ApplyVisualState(bool numLockOn)
-        {
-            RgbaStyle style = numLockOn ? activeStyle : inactiveStyle;
-
-            StateText.Text = numLockOn ? "NUM LK ON " : "NUM LK OFF";
-            StateIcon.Source = numLockOn ? numLockOnIcon : numLockOffIcon;
-
-            // Opacidad (como tu WinForms: afecta todo el overlay)
-            OverlayBorder.Opacity = Math.Max(0.05, style.A / 255.0);
-            OverlayBorder.Background = new SolidColorBrush(WpfColor.FromRgb(style.R, style.G, style.B));
-
-            double luminance = (0.299 * style.R) + (0.587 * style.G) + (0.114 * style.B);
-            StateText.Foreground = luminance > 150 ? WpfBrushes.Black : WpfBrushes.White;
-        }
-
-        private static bool IsNumLockOn()
-            => (GetKeyState(VK_NUMLOCK) & 1) != 0;
-
-        // ----------------- Tray -----------------
-        private void ConfigureTray()
-        {
-            trayMenu = new Forms.ContextMenuStrip();
-
-            visibleMenuItem = new Forms.ToolStripMenuItem("Ventana visible")
-            {
-                CheckOnClick = true,
-                Checked = true
-            };
-            visibleMenuItem.CheckedChanged += (_, _) => ToggleVisibility();
-
-            movementMenuItem = new Forms.ToolStripMenuItem("Activar movimiento")
-            {
-                CheckOnClick = true,
-                Checked = true
-            };
-            movementMenuItem.CheckedChanged += (_, _) =>
-            {
-                movementEnabled = movementMenuItem.Checked;
-                Cursor = movementEnabled ? WpfCursors.SizeAll : WpfCursors.Arrow;
-                ApplyClickThroughState();
-                RequestSaveConfiguration();
-            };
-
-            topMostMenuItem = new Forms.ToolStripMenuItem("Siempre encima")
-            {
-                CheckOnClick = true,
-                Checked = true
-            };
-            topMostMenuItem.CheckedChanged += (_, _) =>
-            {
-                ApplyTopMostState();
-                RequestSaveConfiguration();
-            };
-
-            runAtStartupMenuItem = new Forms.ToolStripMenuItem("Iniciar con Windows")
-            {
-                CheckOnClick = true,
-                Checked = IsStartupEnabled()
-            };
-            runAtStartupMenuItem.CheckedChanged += (_, _) =>
-            {
-                SetStartupEnabled(runAtStartupMenuItem.Checked);
-                RequestSaveConfiguration();
-            };
-
-            resetConfigMenuItem = new Forms.ToolStripMenuItem("Eliminar configuración...");
-            resetConfigMenuItem.Click += (_, _) =>
-            {
-                var result = Forms.MessageBox.Show(
-                    "Se eliminará la configuración guardada y se restaurarán los valores por defecto.\n\n¿Deseas continuar?",
-                    "Eliminar configuración",
-                    Forms.MessageBoxButtons.YesNo,
-                    Forms.MessageBoxIcon.Warning,
-                    Forms.MessageBoxDefaultButton.Button2);
-
-                if (result != Forms.DialogResult.Yes)
-                    return;
-
-                DeleteConfigurationFile();
-                ApplyDefaultConfiguration();
-            };
-
-            var activeColorMenuItem = new Forms.ToolStripMenuItem("Cambiar color estado activo...");
-
-            activeColorMenuItem.Click += (_, _) =>
-            {
-                var edited = ShowRgbaEditor("Color estado activo", activeStyle);
-                if (edited is not null)
-                {
-                    activeStyle = edited.Value;
-                    UpdateNumLockIndicator();
-                    RequestSaveConfiguration();
-                }
-            };
-
-            var inactiveColorMenuItem = new Forms.ToolStripMenuItem("Cambiar color estado inactivo...");
-
-            inactiveColorMenuItem.Click += (_, _) =>
-            {
-                var edited = ShowRgbaEditor("Color estado inactivo", inactiveStyle);
-
-                if (edited is not null)
-                {
-                    inactiveStyle = edited.Value;
-                    UpdateNumLockIndicator();
-                    RequestSaveConfiguration();
-                }
-            };
-
-            var exitMenuItem = new Forms.ToolStripMenuItem("Salir");
-            exitMenuItem.Click += (_, _) =>
-            {
-                allowExit = true;
-                trayIcon!.Visible = false;
-                Close();
-            };
-
-            trayMenu.Items.Add(visibleMenuItem);
-            trayMenu.Items.Add(movementMenuItem);
-            trayMenu.Items.Add(topMostMenuItem);
-            trayMenu.Items.Add(runAtStartupMenuItem);
-            trayMenu.Items.Add(new Forms.ToolStripSeparator());
-            trayMenu.Items.Add(activeColorMenuItem);
-            trayMenu.Items.Add(inactiveColorMenuItem);
-            trayMenu.Items.Add(new Forms.ToolStripSeparator());
-            trayMenu.Items.Add(resetConfigMenuItem);
-            trayMenu.Items.Add(exitMenuItem);
-
-            trayIcon = new Forms.NotifyIcon
-            {
-                Icon = Drawing.SystemIcons.Information,
-                Text = "LockKeyOverlay",
-                Visible = true,
-                ContextMenuStrip = trayMenu
-            };
-
-            trayIcon.DoubleClick += (_, _) =>
-            {
-                if (visibleMenuItem is null) return;
-                visibleMenuItem.Checked = !visibleMenuItem.Checked;
-            };
-        }
-
-        private void ToggleVisibility()
-        {
-            if (visibleMenuItem is null) return;
-
-            if (visibleMenuItem.Checked)
-            {
-                Show();
-                ApplyTopMostState();
-            }
-            else
-            {
-                Hide();
-            }
-
-            RequestSaveConfiguration();
-        }
-
-        private string GetConfigDirectoryPath()
-        {
-            string appData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-            return Path.Combine(appData, ConfigFolderName);
-        }
-
-        private string GetConfigFilePath()
-        {
-            return Path.Combine(GetConfigDirectoryPath(), ConfigFileName);
-        }
-
-        private void RequestSaveConfiguration()
-        {
-            if (suppressConfigSave)
-                return;
-
-            configSaveDebounceTimer.Stop();
-            configSaveDebounceTimer.Start();
-        }
-
-        private void FlushPendingConfigurationSave()
-        {
-            if (configSaveDebounceTimer.IsEnabled)
-                configSaveDebounceTimer.Stop();
-
-            SaveConfiguration();
-        }
-
-        private void ConfigSaveDebounceTimer_Tick(object? sender, EventArgs e)
-        {
-            configSaveDebounceTimer.Stop();
-            SaveConfiguration();
-        }
-
-        private void Window_LocationChanged(object? sender, EventArgs e)
-        {
-            if (!IsLoaded)
-                return;
-
-            RequestSaveConfiguration();
-        }
-
-        private void Window_IsVisibleChanged(object sender, DependencyPropertyChangedEventArgs e)
-        {
-            if (!IsLoaded)
-                return;
-
-            RequestSaveConfiguration();
-        }
-
-        private (double ScaleX, double ScaleY) GetWindowDpiScale()
-        {
-            var source = PresentationSource.FromVisual(this);
-
-            if (source?.CompositionTarget is null)
-                return (1.0, 1.0);
-
-            return (
-                source.CompositionTarget.TransformToDevice.M11,
-                source.CompositionTarget.TransformToDevice.M22
-            );
-        }
-
-        private Drawing.Point GetWindowTopLeftPx()
-        {
-            var (scaleX, scaleY) = GetWindowDpiScale();
-
-            int x = (int)Math.Round(Left * scaleX);
-            int y = (int)Math.Round(Top * scaleY);
-
-            return new Drawing.Point(x, y);
-        }
-
-        private static Forms.Screen? FindScreenByDeviceName(string? deviceName)
-        {
-            if (string.IsNullOrWhiteSpace(deviceName))
-                return null;
-
-            foreach (var screen in Forms.Screen.AllScreens)
-            {
-                if (string.Equals(screen.DeviceName, deviceName, StringComparison.OrdinalIgnoreCase))
-                    return screen;
-            }
-
-            return null;
-        }
-
-        private void RestoreWindowPositionSafely(AppConfig config)
-        {
-            var (scaleX, scaleY) = GetWindowDpiScale();
-
-            // Posición deseada en px (preferimos px si existe; fallback a DIP legacy)
-            double desiredLeftPx;
-            double desiredTopPx;
-
-            if (config.LeftPx.HasValue && config.TopPx.HasValue)
-            {
-                desiredLeftPx = config.LeftPx.Value;
-                desiredTopPx = config.TopPx.Value;
-            }
-            else
-            {
-                desiredLeftPx = config.Left * scaleX;
-                desiredTopPx = config.Top * scaleY;
-            }
-
-            // Elegir monitor guardado si aún existe
-            Forms.Screen? savedScreen = FindScreenByDeviceName(config.ScreenDeviceName);
-
-            // Si no existe, usar monitor donde caería el punto; si no, primario
-            Forms.Screen? targetScreen =
-                savedScreen
-                ?? Forms.Screen.FromPoint(new Drawing.Point(
-                    (int)Math.Round(desiredLeftPx),
-                    (int)Math.Round(desiredTopPx)))
-                ?? Forms.Screen.PrimaryScreen;
-
-            if (targetScreen is null)
-            {
-                return;
-            }
-
-            var boundsPx = targetScreen.Bounds;
-
-            double windowWidthPx = Math.Max(1, ActualWidth * scaleX);
-            double windowHeightPx = Math.Max(1, ActualHeight * scaleY);
-
-            double minLeftPx = boundsPx.Left;
-            double minTopPx = boundsPx.Top;
-
-            double maxLeftPx = boundsPx.Right - windowWidthPx;
-            double maxTopPx = boundsPx.Bottom - windowHeightPx;
-
-            // Si por cualquier razón la ventana fuera más grande que la pantalla
-            if (maxLeftPx < minLeftPx) maxLeftPx = minLeftPx;
-            if (maxTopPx < minTopPx) maxTopPx = minTopPx;
-
-            double clampedLeftPx = Math.Max(minLeftPx, Math.Min(desiredLeftPx, maxLeftPx));
-            double clampedTopPx = Math.Max(minTopPx, Math.Min(desiredTopPx, maxTopPx));
-
-            Left = clampedLeftPx / scaleX;
-            Top = clampedTopPx / scaleY;
-        }
-
-        private void CenterOverlayOnPrimaryScreen()
-        {
-            var primary = Forms.Screen.PrimaryScreen;
-
-            if (primary is null)
-                return;
-
-            var (scaleX, scaleY) = GetWindowDpiScale();
-            var workAreaPx = primary.WorkingArea;
-
-            double windowWidthPx = Math.Max(1, ActualWidth * scaleX);
-            double windowHeightPx = Math.Max(1, ActualHeight * scaleY);
-
-            double leftPx = workAreaPx.Left + ((workAreaPx.Width - windowWidthPx) / 2.0);
-            double topPx = workAreaPx.Top + ((workAreaPx.Height - windowHeightPx) / 2.0);
-
-            Left = leftPx / scaleX;
-            Top = topPx / scaleY;
-        }
-
-        private void SaveConfiguration()
-        {
-            if (suppressConfigSave)
-                return;
-
-            try
-            {
-                var currentWindowTopLeftPx = GetWindowTopLeftPx();
-                var currentScreen = Forms.Screen.FromPoint(currentWindowTopLeftPx);
-
-                var config = new AppConfig
-                {
-                    Left = Left,
-                    Top = Top,
-                    ScreenDeviceName = currentScreen.DeviceName,
-                    LeftPx = currentWindowTopLeftPx.X,
-                    TopPx = currentWindowTopLeftPx.Y,
-                    IsVisible = IsVisible,
-                    MovementEnabled = movementMenuItem?.Checked ?? movementEnabled,
-                    TopMostEnabled = topMostMenuItem?.Checked ?? Topmost,
-                    RunAtStartupEnabled = runAtStartupMenuItem?.Checked ?? false,
-                    Active = new RgbaConfig
-                    {
-                        R = activeStyle.R,
-                        G = activeStyle.G,
-                        B = activeStyle.B,
-                        A = activeStyle.A
-                    },
-                    Inactive = new RgbaConfig
-                    {
-                        R = inactiveStyle.R,
-                        G = inactiveStyle.G,
-                        B = inactiveStyle.B,
-                        A = inactiveStyle.A
-                    }
-                };
-
-                string dir = GetConfigDirectoryPath();
-                Directory.CreateDirectory(dir);
-
-                string path = GetConfigFilePath();
-                string json = JsonSerializer.Serialize(config, new JsonSerializerOptions
-                {
-                    WriteIndented = true
-                });
-
-                File.WriteAllText(path, json);
-            }
-            catch
-            {
-                // Intencionalmente silencioso para no romper la app por un fallo de IO.
-            }
-        }
-
-        private bool LoadConfiguration()
-        {
-            string path = GetConfigFilePath();
-
-            if (!File.Exists(path))
-                return false;
-
-            try
-            {
-                string json = File.ReadAllText(path);
-                AppConfig? config = JsonSerializer.Deserialize<AppConfig>(json);
-
-                if (config is null)
-                    return false;
-
-                suppressConfigSave = true;
-
-                // Posición (restauración segura con monitor guardado)
-                RestoreWindowPositionSafely(config);
-
-                // Colores/alpha
-                if (config.Active is not null)
-                    activeStyle = new RgbaStyle(config.Active.R, config.Active.G, config.Active.B, config.Active.A);
-
-                if (config.Inactive is not null)
-                    inactiveStyle = new RgbaStyle(config.Inactive.R, config.Inactive.G, config.Inactive.B, config.Inactive.A);
-
-                // Menús (esto dispara handlers y aplica estados)
-                if (movementMenuItem is not null)
-                    movementMenuItem.Checked = config.MovementEnabled;
-
-                if (topMostMenuItem is not null)
-                    topMostMenuItem.Checked = config.TopMostEnabled;
-
-                if (visibleMenuItem is not null)
-                    visibleMenuItem.Checked = config.IsVisible;
-
-                // Este sí escribe en registry si cambia
-                if (runAtStartupMenuItem is not null && runAtStartupMenuItem.Checked != config.RunAtStartupEnabled)
-                {
-                    runAtStartupMenuItem.Checked = config.RunAtStartupEnabled;
-                }
-
-                return true;
-            }
-            catch
-            {
-                // Si el JSON está corrupto, simplemente se ignora y se usan defaults.
-                return false;
-            }
-            finally
-            {
-                suppressConfigSave = false;
-            }
-        }
-
-        private void DeleteConfigurationFile()
-        {
-            try
-            {
-                string path = GetConfigFilePath();
-
-                if (File.Exists(path))
-                    File.Delete(path);
-            }
-            catch
-            {
-                // Intencionalmente silencioso.
-            }
-        }
-
-        private void ApplyDefaultConfiguration()
-        {
-            suppressConfigSave = true;
-
-            try
-            {
-                activeStyle = DefaultActiveStyle;
-                inactiveStyle = DefaultInactiveStyle;
-
-                CenterOverlayOnPrimaryScreen();
-
-                if (movementMenuItem is not null)
-                    movementMenuItem.Checked = true;
-                else
-                    movementEnabled = true;
-
-                if (topMostMenuItem is not null)
-                    topMostMenuItem.Checked = true;
-                else
-                    Topmost = true;
-
-                if (visibleMenuItem is not null)
-                    visibleMenuItem.Checked = true;
-                else
-                    Show();
-
-                // No forzamos RunAtStartup aquí porque borrar config no necesariamente
-                // debe tocar la preferencia de inicio en Windows si tú no quieres.
-                // Si quieres que también se desactive, te digo la línea exacta.
-            }
-            finally
-            {
-                suppressConfigSave = false;
-            }
-
-            ApplyClickThroughState();
             ApplyTopMostState();
-            UpdateNumLockIndicator();
-        }
-
-        private bool IsStartupEnabled()
+            RequestSaveConfiguration();
+        };
+        _trayMenuService.RunAtStartupChanged += (_, _) => ApplyStartupFromTray();
+        _trayMenuService.ResetConfigurationRequested += (_, _) => ConfirmAndResetConfiguration();
+        _trayMenuService.ActiveColorChangeRequested += (_, _) => EditActiveColor();
+        _trayMenuService.InactiveColorChangeRequested += (_, _) => EditInactiveColor();
+        _trayMenuService.ExitRequested += (_, _) =>
         {
-            using RegistryKey? key = Registry.CurrentUser.OpenSubKey(StartupRunKeyPath, writable: false);
-            string? value = key?.GetValue(StartupValueName) as string;
+            _allowExit = true;
+            _trayMenuService.HideIcon();
+            Close();
+        };
+    }
 
-            if (string.IsNullOrWhiteSpace(value))
-                return false;
+    private void StartHooks()
+    {
+        ServiceResult foregroundResult = _foregroundHookService.Start();
+        ReportNonFatalIssue(foregroundResult, showDialog: !foregroundResult.Succeeded);
 
-            string? exePath = Environment.ProcessPath;
-            if (string.IsNullOrWhiteSpace(exePath))
-                return false;
+        ServiceResult keyboardResult = _keyboardHookService.Start();
+        ReportNonFatalIssue(keyboardResult, showDialog: !keyboardResult.Succeeded);
+    }
 
-            string expected = $"\"{exePath}\"";
-            return string.Equals(value, expected, StringComparison.OrdinalIgnoreCase);
-        }
+    private void KeyboardHookService_NumLockReleased(object? sender, EventArgs e)
+    {
+        Dispatcher.BeginInvoke(UpdateNumLockIndicator);
+    }
 
-        private void SetStartupEnabled(bool enabled)
+    private void ForegroundHookService_ForegroundChanged(object? sender, EventArgs e)
+    {
+        if (_trayMenuService?.TopMostEnabled != true)
+            return;
+
+        if (!IsVisible)
+            return;
+
+        if (_windowHandle == IntPtr.Zero)
+            return;
+
+        Dispatcher.BeginInvoke(ApplyTopMostState);
+    }
+
+    private void ApplyVisibilityFromTray()
+    {
+        if (_trayMenuService is null)
+            return;
+
+        if (_trayMenuService.IsVisibleChecked)
         {
-            using RegistryKey? key = Registry.CurrentUser.CreateSubKey(StartupRunKeyPath);
-
-            if (key is null)
-            {
-                if (runAtStartupMenuItem is not null)
-                    runAtStartupMenuItem.Checked = false;
-
-                return;
-            }
-
-            if (enabled)
-            {
-                string? exePath = Environment.ProcessPath;
-
-                if (string.IsNullOrWhiteSpace(exePath))
-                {
-                    if (runAtStartupMenuItem is not null)
-                        runAtStartupMenuItem.Checked = false;
-
-                    return;
-                }
-
-                key.SetValue(StartupValueName, $"\"{exePath}\"");
-            }
-            else
-            {
-                key.DeleteValue(StartupValueName, throwOnMissingValue: false);
-            }
+            Show();
+            ApplyTopMostState();
         }
-
-        // ----------------- Movimiento (drag) con clamp a pantalla -----------------
-        private void Overlay_MouseLeftButtonDown(object sender, WpfMouseButtonEventArgs e)
+        else
         {
-            if (!movementEnabled) return;
-
-            isDragging = true;
-            dragStartMousePx = Forms.Cursor.Position;
-            dragStartLeftDip = Left;
-            dragStartTopDip = Top;
-
-            Mouse.Capture(OverlayBorder);
+            Hide();
         }
 
-        private void Overlay_MouseMove(object sender, WpfMouseEventArgs e)
+        RequestSaveConfiguration();
+    }
+
+    private void ApplyMovementFromTray()
+    {
+        if (_trayMenuService is null)
+            return;
+
+        _movementEnabled = _trayMenuService.MovementEnabled;
+        Cursor = _movementEnabled ? WpfCursors.SizeAll : WpfCursors.Arrow;
+        ApplyClickThroughState();
+        RequestSaveConfiguration();
+    }
+
+    private void ApplyStartupFromTray()
+    {
+        if (_trayMenuService is null)
+            return;
+
+        bool requestedState = _trayMenuService.RunAtStartupEnabled;
+        ServiceResult result = _startupService.SetEnabled(requestedState);
+
+        if (!result.Succeeded)
         {
-            if (!movementEnabled) return;
-            if (!isDragging) return;
-
-            var src = PresentationSource.FromVisual(this);
-            if (src?.CompositionTarget is null) return;
-
-            double scaleX = src.CompositionTarget.TransformToDevice.M11;
-            double scaleY = src.CompositionTarget.TransformToDevice.M22;
-
-            var currentMousePx = Forms.Cursor.Position;
-
-            int dxPx = currentMousePx.X - dragStartMousePx.X;
-            int dyPx = currentMousePx.Y - dragStartMousePx.Y;
-
-            double dxDip = dxPx / scaleX;
-            double dyDip = dyPx / scaleY;
-
-            double targetLeftDip = dragStartLeftDip + dxDip;
-            double targetTopDip = dragStartTopDip + dyDip;
-
-            // Clamp usando la pantalla del cursor (Bounds incluye taskbar)
-            var screen = Forms.Screen.FromPoint(currentMousePx);
-            var boundsPx = screen.Bounds;
-
-            double windowWidthPx = ActualWidth * scaleX;
-            double windowHeightPx = ActualHeight * scaleY;
-
-            double targetLeftPx = targetLeftDip * scaleX;
-            double targetTopPx = targetTopDip * scaleY;
-
-            double minLeftPx = boundsPx.Left;
-            double maxLeftPx = boundsPx.Right - windowWidthPx;
-
-            double minTopPx = boundsPx.Top;
-            double maxTopPx = boundsPx.Bottom - windowHeightPx;
-
-            double clampedLeftPx = Math.Max(minLeftPx, Math.Min(targetLeftPx, maxLeftPx));
-            double clampedTopPx = Math.Max(minTopPx, Math.Min(targetTopPx, maxTopPx));
-
-            Left = clampedLeftPx / scaleX;
-            Top = clampedTopPx / scaleY;
+            _trayMenuService.SetRunAtStartupEnabledSilently(!requestedState);
+            ReportNonFatalIssue(result, showDialog: true);
+            return;
         }
 
-        private void Overlay_MouseLeftButtonUp(object sender, WpfMouseButtonEventArgs e)
+        RequestSaveConfiguration();
+    }
+
+    private void ConfirmAndResetConfiguration()
+    {
+        var result = Forms.MessageBox.Show(
+            "Se eliminará la configuración guardada y se restaurarán los valores por defecto.\n\n¿Deseas continuar?",
+            "Eliminar configuración",
+            Forms.MessageBoxButtons.YesNo,
+            Forms.MessageBoxIcon.Warning,
+            Forms.MessageBoxDefaultButton.Button2);
+
+        if (result != Forms.DialogResult.Yes)
+            return;
+
+        ServiceResult deleteResult = _configService.Delete();
+        ReportNonFatalIssue(deleteResult, showDialog: !deleteResult.Succeeded);
+        ApplyDefaultConfiguration();
+    }
+
+    private void EditActiveColor()
+    {
+        RgbaStyle? edited = ShowRgbaEditor("Color estado activo", _activeStyle);
+
+        if (edited is null)
+            return;
+
+        _activeStyle = edited.Value;
+        UpdateNumLockIndicator();
+        RequestSaveConfiguration();
+    }
+
+    private void EditInactiveColor()
+    {
+        RgbaStyle? edited = ShowRgbaEditor("Color estado inactivo", _inactiveStyle);
+
+        if (edited is null)
+            return;
+
+        _inactiveStyle = edited.Value;
+        UpdateNumLockIndicator();
+        RequestSaveConfiguration();
+    }
+
+    private void UpdateNumLockIndicator()
+    {
+        bool numLockOn = KeyboardHookService.IsNumLockOn();
+        ApplyVisualState(numLockOn);
+    }
+
+    private void ApplyVisualState(bool numLockOn)
+    {
+        RgbaStyle style = numLockOn ? _activeStyle : _inactiveStyle;
+
+        StateText.Text = numLockOn ? "NUM LK ON " : "NUM LK OFF";
+        StateIcon.Source = numLockOn ? _numLockOnIcon : _numLockOffIcon;
+
+        OverlayBorder.Opacity = style.OverlayOpacity;
+        OverlayBorder.Background = new SolidColorBrush(WpfColor.FromRgb(style.R, style.G, style.B));
+        StateText.Foreground = style.UsesDarkForeground ? WpfBrushes.Black : WpfBrushes.White;
+    }
+
+    private void RequestSaveConfiguration()
+    {
+        if (_suppressConfigSave)
+            return;
+
+        _configSaveDebounceTimer.Stop();
+        _configSaveDebounceTimer.Start();
+    }
+
+    private void FlushPendingConfigurationSave()
+    {
+        if (_configSaveDebounceTimer.IsEnabled)
+            _configSaveDebounceTimer.Stop();
+
+        SaveConfiguration();
+    }
+
+    private void ConfigSaveDebounceTimer_Tick(object? sender, EventArgs e)
+    {
+        _configSaveDebounceTimer.Stop();
+        SaveConfiguration();
+    }
+
+    private void Window_LocationChanged(object? sender, EventArgs e)
+    {
+        if (IsLoaded)
+            RequestSaveConfiguration();
+    }
+
+    private void Window_IsVisibleChanged(object sender, DependencyPropertyChangedEventArgs e)
+    {
+        if (IsLoaded)
+            RequestSaveConfiguration();
+    }
+
+    private (double ScaleX, double ScaleY) GetWindowDpiScale()
+    {
+        var source = PresentationSource.FromVisual(this);
+
+        if (source?.CompositionTarget is null)
+            return (1.0, 1.0);
+
+        return (
+            source.CompositionTarget.TransformToDevice.M11,
+            source.CompositionTarget.TransformToDevice.M22
+        );
+    }
+
+    private Drawing.Point GetWindowTopLeftPx()
+    {
+        var (scaleX, scaleY) = GetWindowDpiScale();
+
+        int x = (int)Math.Round(Left * scaleX);
+        int y = (int)Math.Round(Top * scaleY);
+
+        return new Drawing.Point(x, y);
+    }
+
+    private static Forms.Screen? FindScreenByDeviceName(string? deviceName)
+    {
+        if (string.IsNullOrWhiteSpace(deviceName))
+            return null;
+
+        foreach (var screen in Forms.Screen.AllScreens)
         {
-            if (e.ChangedButton != MouseButton.Left) return;
-
-            isDragging = false;
-            Mouse.Capture(null);
-
-            FlushPendingConfigurationSave();
+            if (string.Equals(screen.DeviceName, deviceName, StringComparison.OrdinalIgnoreCase))
+                return screen;
         }
 
-        // ----------------- Click-through -----------------
-        private void ApplyClickThroughState()
+        return null;
+    }
+
+    private void RestoreWindowPositionSafely(AppConfig config)
+    {
+        var (scaleX, scaleY) = GetWindowDpiScale();
+
+        double desiredLeftPx;
+        double desiredTopPx;
+
+        if (config.LeftPx.HasValue && config.TopPx.HasValue)
         {
-            if (windowHandle == IntPtr.Zero) return;
-
-            IntPtr exStylePtr = GetWindowLongPtrCompat(windowHandle, GWL_EXSTYLE);
-            int exStyle = exStylePtr.ToInt32();
-
-            if (!movementEnabled)
-                exStyle |= WS_EX_TRANSPARENT;
-            else
-                exStyle &= ~WS_EX_TRANSPARENT;
-
-            SetWindowLongPtrCompat(windowHandle, GWL_EXSTYLE, new IntPtr(exStyle));
+            desiredLeftPx = config.LeftPx.Value;
+            desiredTopPx = config.TopPx.Value;
         }
-
-        private void ApplyToolWindowStyle()
+        else
         {
-            if (windowHandle == IntPtr.Zero) return;
-
-            IntPtr exStylePtr = GetWindowLongPtrCompat(windowHandle, GWL_EXSTYLE);
-            int exStyle = exStylePtr.ToInt32();
-
-            exStyle |= WS_EX_TOOLWINDOW;
-            SetWindowLongPtrCompat(windowHandle, GWL_EXSTYLE, new IntPtr(exStyle));
+            desiredLeftPx = config.Left * scaleX;
+            desiredTopPx = config.Top * scaleY;
         }
 
-        // ----------------- Topmost reforzado -----------------
-        private void InstallForegroundEventHook()
+        Forms.Screen? savedScreen = FindScreenByDeviceName(config.ScreenDeviceName);
+
+        Forms.Screen? targetScreen =
+            savedScreen
+            ?? Forms.Screen.FromPoint(new Drawing.Point(
+                (int)Math.Round(desiredLeftPx),
+                (int)Math.Round(desiredTopPx)))
+            ?? Forms.Screen.PrimaryScreen;
+
+        if (targetScreen is null)
+            return;
+
+        var boundsPx = targetScreen.Bounds;
+
+        double windowWidthPx = Math.Max(1, ActualWidth * scaleX);
+        double windowHeightPx = Math.Max(1, ActualHeight * scaleY);
+
+        double minLeftPx = boundsPx.Left;
+        double minTopPx = boundsPx.Top;
+
+        double maxLeftPx = boundsPx.Right - windowWidthPx;
+        double maxTopPx = boundsPx.Bottom - windowHeightPx;
+
+        if (maxLeftPx < minLeftPx)
+            maxLeftPx = minLeftPx;
+
+        if (maxTopPx < minTopPx)
+            maxTopPx = minTopPx;
+
+        double clampedLeftPx = Math.Max(minLeftPx, Math.Min(desiredLeftPx, maxLeftPx));
+        double clampedTopPx = Math.Max(minTopPx, Math.Min(desiredTopPx, maxTopPx));
+
+        Left = clampedLeftPx / scaleX;
+        Top = clampedTopPx / scaleY;
+    }
+
+    private void CenterOverlayOnPrimaryScreen()
+    {
+        var primary = Forms.Screen.PrimaryScreen;
+
+        if (primary is null)
+            return;
+
+        var (scaleX, scaleY) = GetWindowDpiScale();
+        var workAreaPx = primary.WorkingArea;
+
+        double windowWidthPx = Math.Max(1, ActualWidth * scaleX);
+        double windowHeightPx = Math.Max(1, ActualHeight * scaleY);
+
+        double leftPx = workAreaPx.Left + ((workAreaPx.Width - windowWidthPx) / 2.0);
+        double topPx = workAreaPx.Top + ((workAreaPx.Height - windowHeightPx) / 2.0);
+
+        Left = leftPx / scaleX;
+        Top = topPx / scaleY;
+    }
+
+    private void SaveConfiguration()
+    {
+        if (_suppressConfigSave)
+            return;
+
+        var currentWindowTopLeftPx = GetWindowTopLeftPx();
+        var currentScreen = Forms.Screen.FromPoint(currentWindowTopLeftPx);
+
+        var config = new AppConfig
         {
-            foregroundEventHook = SetWinEventHook(
-                EVENT_SYSTEM_FOREGROUND,
-                EVENT_SYSTEM_FOREGROUND,
-                IntPtr.Zero,
-                foregroundChangedProc,
-                0,
-                0,
-                WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
-        }
+            Left = Left,
+            Top = Top,
+            ScreenDeviceName = currentScreen.DeviceName,
+            LeftPx = currentWindowTopLeftPx.X,
+            TopPx = currentWindowTopLeftPx.Y,
+            IsVisible = IsVisible,
+            MovementEnabled = _trayMenuService?.MovementEnabled ?? _movementEnabled,
+            TopMostEnabled = _trayMenuService?.TopMostEnabled ?? Topmost,
+            RunAtStartupEnabled = _trayMenuService?.RunAtStartupEnabled ?? false,
+            Active = RgbaConfig.FromStyle(_activeStyle),
+            Inactive = RgbaConfig.FromStyle(_inactiveStyle)
+        };
 
-        private void ForegroundChanged(
-            IntPtr hWinEventHook,
-            uint eventType,
-            IntPtr hwnd,
-            int idObject,
-            int idChild,
-            uint dwEventThread,
-            uint dwmsEventTime)
+        ServiceResult result = _configService.Save(config);
+        ReportNonFatalIssue(result);
+    }
+
+    private bool LoadConfiguration()
+    {
+        ConfigLoadResult result = _configService.Load();
+
+        if (result.Status == ConfigLoadStatus.NotFound)
+            return false;
+
+        if (result.Status != ConfigLoadStatus.Loaded || result.Config is null)
         {
-            if (topMostMenuItem?.Checked != true) return;
-            if (!IsVisible) return;
-            if (windowHandle == IntPtr.Zero) return;
+            ReportNonFatalIssue(
+                ServiceResult.Failure(result.Message, result.Exception),
+                showDialog: result.Status == ConfigLoadStatus.Failed);
 
-            Dispatcher.BeginInvoke(ApplyTopMostState);
+            return false;
         }
 
-        private void ApplyTopMostState()
+        _suppressConfigSave = true;
+
+        try
         {
-            bool enabled = topMostMenuItem?.Checked ?? true;
-
-            Topmost = enabled;
-
-            if (windowHandle == IntPtr.Zero) return;
-
-            SetWindowPos(
-                windowHandle,
-                enabled ? HWND_TOPMOST : HWND_NOTOPMOST,
-                0, 0, 0, 0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+            ApplyConfiguration(result.Config);
+            return true;
         }
-
-        // ----------------- Hook teclado -----------------
-        private void InstallKeyboardHook()
+        finally
         {
-            IntPtr moduleHandle = GetModuleHandle(null);
-
-            keyboardHook = SetWindowsHookEx(
-                WH_KEYBOARD_LL,
-                keyboardProc,
-                moduleHandle,
-                0);
+            _suppressConfigSave = false;
         }
+    }
 
-        private IntPtr HookCallback(int nCode, IntPtr wParam, IntPtr lParam)
+    private void ApplyConfiguration(AppConfig config)
+    {
+        RestoreWindowPositionSafely(config);
+
+        _activeStyle = config.Active?.ToStyle() ?? DefaultActiveStyle;
+        _inactiveStyle = config.Inactive?.ToStyle() ?? DefaultInactiveStyle;
+
+        if (_trayMenuService is null)
+            return;
+
+        _trayMenuService.SetMovementEnabledSilently(config.MovementEnabled);
+        _trayMenuService.SetTopMostEnabledSilently(config.TopMostEnabled);
+        _trayMenuService.SetVisibleCheckedSilently(config.IsVisible);
+        _trayMenuService.SetRunAtStartupEnabledSilently(config.RunAtStartupEnabled);
+
+        _movementEnabled = config.MovementEnabled;
+        Cursor = _movementEnabled ? WpfCursors.SizeAll : WpfCursors.Arrow;
+
+        ApplyClickThroughState();
+        ApplyTopMostState();
+
+        if (config.IsVisible)
+            Show();
+        else
+            Hide();
+
+        ServiceResult startupResult = _startupService.SetEnabled(config.RunAtStartupEnabled);
+        ReportNonFatalIssue(startupResult, showDialog: !startupResult.Succeeded);
+    }
+
+    private void ApplyDefaultConfiguration()
+    {
+        _suppressConfigSave = true;
+
+        try
         {
-            if (nCode >= 0)
-            {
-                int message = wParam.ToInt32();
+            _activeStyle = DefaultActiveStyle;
+            _inactiveStyle = DefaultInactiveStyle;
 
-                if (message == WM_KEYUP || message == WM_SYSKEYUP)
-                {
-                    KbdLlHookStruct keyInfo = Marshal.PtrToStructure<KbdLlHookStruct>(lParam);
+            CenterOverlayOnPrimaryScreen();
 
-                    if (keyInfo.vkCode == VK_NUMLOCK)
-                    {
-                        Dispatcher.BeginInvoke(UpdateNumLockIndicator);
-                    }
-                }
-            }
+            _movementEnabled = true;
+            _trayMenuService?.SetMovementEnabledSilently(true);
+            _trayMenuService?.SetTopMostEnabledSilently(true);
+            _trayMenuService?.SetVisibleCheckedSilently(true);
 
-            return CallNextHookEx(keyboardHook, nCode, wParam, lParam);
+            Show();
         }
-
-        private sealed class AppConfig
+        finally
         {
-            public double Left { get; set; }
-            public double Top { get; set; }
-
-            public string? ScreenDeviceName { get; set; }
-            public int? LeftPx { get; set; }
-            public int? TopPx { get; set; }
-
-            public bool IsVisible { get; set; }
-            public bool MovementEnabled { get; set; }
-            public bool TopMostEnabled { get; set; }
-            public bool RunAtStartupEnabled { get; set; }
-            public RgbaConfig? Active { get; set; }
-            public RgbaConfig? Inactive { get; set; }
+            _suppressConfigSave = false;
         }
 
-        private sealed class RgbaConfig
+        Cursor = WpfCursors.SizeAll;
+        ApplyClickThroughState();
+        ApplyTopMostState();
+        UpdateNumLockIndicator();
+        SaveConfiguration();
+    }
+
+    private void Overlay_MouseLeftButtonDown(object sender, WpfMouseButtonEventArgs e)
+    {
+        if (!_movementEnabled)
+            return;
+
+        _isDragging = true;
+        _dragStartMousePx = Forms.Cursor.Position;
+        _dragStartLeftDip = Left;
+        _dragStartTopDip = Top;
+
+        Mouse.Capture(OverlayBorder);
+    }
+
+    private void Overlay_MouseMove(object sender, WpfMouseEventArgs e)
+    {
+        if (!_movementEnabled)
+            return;
+
+        if (!_isDragging)
+            return;
+
+        var src = PresentationSource.FromVisual(this);
+        if (src?.CompositionTarget is null)
+            return;
+
+        double scaleX = src.CompositionTarget.TransformToDevice.M11;
+        double scaleY = src.CompositionTarget.TransformToDevice.M22;
+
+        var currentMousePx = Forms.Cursor.Position;
+
+        int dxPx = currentMousePx.X - _dragStartMousePx.X;
+        int dyPx = currentMousePx.Y - _dragStartMousePx.Y;
+
+        double dxDip = dxPx / scaleX;
+        double dyDip = dyPx / scaleY;
+
+        double targetLeftDip = _dragStartLeftDip + dxDip;
+        double targetTopDip = _dragStartTopDip + dyDip;
+
+        var screen = Forms.Screen.FromPoint(currentMousePx);
+        var boundsPx = screen.Bounds;
+
+        double windowWidthPx = ActualWidth * scaleX;
+        double windowHeightPx = ActualHeight * scaleY;
+
+        double targetLeftPx = targetLeftDip * scaleX;
+        double targetTopPx = targetTopDip * scaleY;
+
+        double minLeftPx = boundsPx.Left;
+        double maxLeftPx = boundsPx.Right - windowWidthPx;
+
+        double minTopPx = boundsPx.Top;
+        double maxTopPx = boundsPx.Bottom - windowHeightPx;
+
+        double clampedLeftPx = Math.Max(minLeftPx, Math.Min(targetLeftPx, maxLeftPx));
+        double clampedTopPx = Math.Max(minTopPx, Math.Min(targetTopPx, maxTopPx));
+
+        Left = clampedLeftPx / scaleX;
+        Top = clampedTopPx / scaleY;
+    }
+
+    private void Overlay_MouseLeftButtonUp(object sender, WpfMouseButtonEventArgs e)
+    {
+        if (e.ChangedButton != MouseButton.Left)
+            return;
+
+        _isDragging = false;
+        Mouse.Capture(null);
+
+        FlushPendingConfigurationSave();
+    }
+
+    private void ApplyClickThroughState()
+    {
+        if (_windowInteropService is null)
+            return;
+
+        ServiceResult result = _windowInteropService.ApplyClickThrough(!_movementEnabled);
+        ReportNonFatalIssue(result);
+    }
+
+    private void ApplyTopMostState()
+    {
+        bool enabled = _trayMenuService?.TopMostEnabled ?? true;
+
+        Topmost = enabled;
+
+        if (_windowInteropService is null)
+            return;
+
+        ServiceResult result = _windowInteropService.ApplyTopMost(enabled);
+        ReportNonFatalIssue(result);
+    }
+
+    private RgbaStyle? ShowRgbaEditor(string title, RgbaStyle current)
+    {
+        ColorEditorWindow dialog = new(title, current.R, current.G, current.B, current.A)
         {
-            public byte R { get; set; }
-            public byte G { get; set; }
-            public byte B { get; set; }
-            public byte A { get; set; }
-        }
+            Owner = this
+        };
 
-        // ----------------- RGBA editor (WinForms) -----------------
-        private RgbaStyle? ShowRgbaEditor(string title, RgbaStyle current)
-        {
-            ColorEditorWindow dialog = new(title, current.R, current.G, current.B, current.A)
-            {
-                Owner = this
-            };
+        bool? result = dialog.ShowDialog();
 
-            bool? result = dialog.ShowDialog();
+        if (result != true)
+            return null;
 
-            if (result != true)
-                return null;
+        return new RgbaStyle(
+            dialog.SelectedR,
+            dialog.SelectedG,
+            dialog.SelectedB,
+            dialog.SelectedA);
+    }
 
-            return new RgbaStyle(
-                dialog.SelectedR,
-                dialog.SelectedG,
-                dialog.SelectedB,
-                dialog.SelectedA);
-        }
+    private void Window_Closing(object? sender, CancelEventArgs e)
+    {
+        if (_allowExit)
+            return;
 
-        // ----------------- Cierre / cleanup -----------------
-        private void Window_Closing(object? sender, System.ComponentModel.CancelEventArgs e)
-        {
-            if (!allowExit)
-            {
-                e.Cancel = true;
-                if (visibleMenuItem is not null) visibleMenuItem.Checked = false;
-                FlushPendingConfigurationSave();
-                Hide();
-            }
-        }
+        e.Cancel = true;
+        _trayMenuService?.SetVisibleCheckedSilently(false);
+        Hide();
+        FlushPendingConfigurationSave();
+    }
 
-        private void Window_Closed(object? sender, EventArgs e)
-        {
-            if (keyboardHook != IntPtr.Zero)
-            {
-                UnhookWindowsHookEx(keyboardHook);
-                keyboardHook = IntPtr.Zero;
-            }
+    private void Window_Closed(object? sender, EventArgs e)
+    {
+        _keyboardHookService.NumLockReleased -= KeyboardHookService_NumLockReleased;
+        _foregroundHookService.ForegroundChanged -= ForegroundHookService_ForegroundChanged;
 
-            if (foregroundEventHook != IntPtr.Zero)
-            {
-                UnhookWinEvent(foregroundEventHook);
-                foregroundEventHook = IntPtr.Zero;
-            }
+        _keyboardHookService.Dispose();
+        _foregroundHookService.Dispose();
 
-            if (trayIcon is not null)
-            {
-                trayIcon.Visible = false;
-                trayIcon.Dispose();
-                trayIcon = null;
-            }
+        _trayMenuService?.Dispose();
+        _trayMenuService = null;
+    }
 
-            trayMenu?.Dispose();
-            trayMenu = null;
-        }
+    private static void ReportNonFatalIssue(ServiceResult result, bool showDialog = false)
+    {
+        if (result.Succeeded)
+            return;
 
-        private readonly struct RgbaStyle
-        {
-            public byte R { get; }
-            public byte G { get; }
-            public byte B { get; }
-            public byte A { get; }
+        Debug.WriteLine(result.DiagnosticMessage);
 
-            public RgbaStyle(byte r, byte g, byte b, byte a)
-            {
-                R = r;
-                G = g;
-                B = b;
-                A = a;
-            }
+        if (!showDialog)
+            return;
 
-            public static RgbaStyle FromOpacity(byte r, byte g, byte b, double opacity)
-            {
-                opacity = Math.Max(0.0, Math.Min(1.0, opacity));
-                byte a = (byte)Math.Round(opacity * 255.0);
-                return new RgbaStyle(r, g, b, a);
-            }
-        }
+        Forms.MessageBox.Show(
+            result.DiagnosticMessage,
+            "LockKeyOverlay",
+            Forms.MessageBoxButtons.OK,
+            Forms.MessageBoxIcon.Warning);
     }
 }

@@ -135,14 +135,14 @@ namespace LockKeyOverlay
                 return;
             }
 
-            if (!IsHexString(raw))
+            if (!ColorHexParser.IsHexString(raw))
             {
                 _hexValid = false;
                 SetHexStatus("HEX inválido", WpfBrushes.Firebrick);
                 return;
             }
 
-            if (!TryParseHexColor(input, out byte r, out byte g, out byte b, out byte? a))
+            if (!ColorHexParser.TryParse(input, out ParsedHexColor parsed))
             {
                 _hexValid = false;
                 SetHexStatus("HEX inválido", WpfBrushes.Firebrick);
@@ -154,13 +154,13 @@ namespace LockKeyOverlay
 
             _updatingControls = true;
 
-            RedSlider.Value = r;
-            GreenSlider.Value = g;
-            BlueSlider.Value = b;
+            RedSlider.Value = parsed.R;
+            GreenSlider.Value = parsed.G;
+            BlueSlider.Value = parsed.B;
 
-            if (a.HasValue)
+            if (parsed.A.HasValue)
             {
-                double opacityPercent = Math.Round((a.Value / 255.0) * 100.0);
+                double opacityPercent = Math.Round((parsed.A.Value / 255.0) * 100.0);
                 opacityPercent = Math.Max(0, Math.Min(100, opacityPercent));
                 OpacitySlider.Value = opacityPercent;
             }
@@ -178,7 +178,7 @@ namespace LockKeyOverlay
             if (string.IsNullOrWhiteSpace(raw))
                 return true;
 
-            if ((raw.Length != 6 && raw.Length != 8) || !IsHexString(raw))
+            if ((raw.Length != 6 && raw.Length != 8) || !ColorHexParser.IsHexString(raw))
             {
                 WpfMessageBox.Show(
                     "El valor HEX no es válido. Usa #RRGGBB o #RRGGBBAA.",
@@ -203,45 +203,5 @@ namespace LockKeyOverlay
             HexStatusText.Foreground = color;
         }
 
-        private static bool IsHexString(string s)
-        {
-            foreach (char c in s)
-            {
-                bool isHex =
-                    (c >= '0' && c <= '9') ||
-                    (c >= 'a' && c <= 'f') ||
-                    (c >= 'A' && c <= 'F');
-
-                if (!isHex)
-                    return false;
-            }
-
-            return true;
-        }
-
-        private static bool TryParseHexColor(string input, out byte r, out byte g, out byte b, out byte? a)
-        {
-            r = g = b = 0;
-            a = null;
-
-            string raw = (input ?? string.Empty).Trim();
-            if (raw.StartsWith("#"))
-                raw = raw[1..];
-
-            if (raw.Length != 6 && raw.Length != 8)
-                return false;
-
-            if (!IsHexString(raw))
-                return false;
-
-            r = Convert.ToByte(raw.Substring(0, 2), 16);
-            g = Convert.ToByte(raw.Substring(2, 2), 16);
-            b = Convert.ToByte(raw.Substring(4, 2), 16);
-
-            if (raw.Length == 8)
-                a = Convert.ToByte(raw.Substring(6, 2), 16);
-
-            return true;
-        }
     }
 }
