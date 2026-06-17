@@ -6,7 +6,7 @@ public sealed class PhysicalNumLockBlinkServiceTests
     [TestMethod]
     public void SetEnabled_StartsBlinkTimer()
     {
-        FakeNumLockHardware hardware = new(numLockOn: true);
+        FakeLockKeyHardware hardware = new(numLockOn: true);
         FakeIntervalTimer blinkTimer = new();
         FakeIntervalTimer restoreTimer = new();
         using PhysicalNumLockBlinkService service = new(hardware, blinkTimer, restoreTimer);
@@ -15,6 +15,7 @@ public sealed class PhysicalNumLockBlinkServiceTests
 
         Assert.IsTrue(result.Succeeded, result.DiagnosticMessage);
         Assert.IsTrue(service.Enabled);
+        Assert.AreEqual(PhysicalBlinkTargetKey.CapsLock, service.TargetKey);
         Assert.IsTrue(blinkTimer.IsEnabled);
         Assert.AreEqual(PhysicalNumLockBlinkService.BlinkInterval, blinkTimer.Interval);
         Assert.AreEqual(PhysicalNumLockBlinkService.PulseDuration, restoreTimer.Interval);
@@ -23,7 +24,7 @@ public sealed class PhysicalNumLockBlinkServiceTests
     [TestMethod]
     public void BlinkTick_DoesNothingWhenNumLockIsOff()
     {
-        FakeNumLockHardware hardware = new(numLockOn: false);
+        FakeLockKeyHardware hardware = new(numLockOn: false);
         FakeIntervalTimer blinkTimer = new();
         FakeIntervalTimer restoreTimer = new();
         using PhysicalNumLockBlinkService service = new(hardware, blinkTimer, restoreTimer);
@@ -31,15 +32,15 @@ public sealed class PhysicalNumLockBlinkServiceTests
         service.SetEnabled(enabled: true);
         blinkTimer.Trigger();
 
-        Assert.IsFalse(hardware.NumLockOn);
+        Assert.IsFalse(hardware.IsLockKeyOn(PhysicalBlinkTargetKey.NumLock));
         Assert.AreEqual(0, hardware.ToggleCount);
         Assert.IsFalse(restoreTimer.IsEnabled);
     }
 
     [TestMethod]
-    public void BlinkTick_PulsesOffAndRestoreTickRestoresOn()
+    public void BlinkTick_PulsesDefaultCapsLockTargetAndRestoreTickRestoresOriginalState()
     {
-        FakeNumLockHardware hardware = new(numLockOn: true);
+        FakeLockKeyHardware hardware = new(numLockOn: true);
         FakeIntervalTimer blinkTimer = new();
         FakeIntervalTimer restoreTimer = new();
         using PhysicalNumLockBlinkService service = new(hardware, blinkTimer, restoreTimer);
@@ -47,21 +48,58 @@ public sealed class PhysicalNumLockBlinkServiceTests
         service.SetEnabled(enabled: true);
         blinkTimer.Trigger();
 
-        Assert.IsFalse(hardware.NumLockOn);
+        Assert.IsTrue(hardware.IsLockKeyOn(PhysicalBlinkTargetKey.NumLock));
+        Assert.IsTrue(hardware.IsLockKeyOn(PhysicalBlinkTargetKey.CapsLock));
         Assert.AreEqual(1, hardware.ToggleCount);
         Assert.IsTrue(restoreTimer.IsEnabled);
 
         restoreTimer.Trigger();
 
-        Assert.IsTrue(hardware.NumLockOn);
+        Assert.IsTrue(hardware.IsLockKeyOn(PhysicalBlinkTargetKey.NumLock));
+        Assert.IsFalse(hardware.IsLockKeyOn(PhysicalBlinkTargetKey.CapsLock));
         Assert.AreEqual(2, hardware.ToggleCount);
         Assert.IsFalse(restoreTimer.IsEnabled);
     }
 
     [TestMethod]
-    public void SetEnabledFalse_RestoresOnWhenDisabledDuringPulse()
+    public void SetTargetKey_UsesSelectedTarget()
     {
-        FakeNumLockHardware hardware = new(numLockOn: true);
+        FakeLockKeyHardware hardware = new(numLockOn: true);
+        FakeIntervalTimer blinkTimer = new();
+        FakeIntervalTimer restoreTimer = new();
+        using PhysicalNumLockBlinkService service = new(hardware, blinkTimer, restoreTimer);
+
+        service.SetEnabled(enabled: true);
+        service.SetTargetKey(PhysicalBlinkTargetKey.ScrollLock);
+        blinkTimer.Trigger();
+
+        Assert.AreEqual(PhysicalBlinkTargetKey.ScrollLock, service.TargetKey);
+        Assert.IsTrue(hardware.IsLockKeyOn(PhysicalBlinkTargetKey.ScrollLock));
+        Assert.IsFalse(hardware.IsLockKeyOn(PhysicalBlinkTargetKey.CapsLock));
+    }
+
+    [TestMethod]
+    public void SetTargetKey_RestoresOldTargetWhenChangedDuringPulse()
+    {
+        FakeLockKeyHardware hardware = new(numLockOn: true);
+        FakeIntervalTimer blinkTimer = new();
+        FakeIntervalTimer restoreTimer = new();
+        using PhysicalNumLockBlinkService service = new(hardware, blinkTimer, restoreTimer);
+
+        service.SetEnabled(enabled: true);
+        blinkTimer.Trigger();
+        ServiceResult result = service.SetTargetKey(PhysicalBlinkTargetKey.NumLock);
+
+        Assert.IsTrue(result.Succeeded, result.DiagnosticMessage);
+        Assert.IsFalse(hardware.IsLockKeyOn(PhysicalBlinkTargetKey.CapsLock));
+        Assert.IsTrue(hardware.IsLockKeyOn(PhysicalBlinkTargetKey.NumLock));
+        Assert.AreEqual(2, hardware.ToggleCount);
+    }
+
+    [TestMethod]
+    public void SetEnabledFalse_RestoresTargetWhenDisabledDuringPulse()
+    {
+        FakeLockKeyHardware hardware = new(numLockOn: true);
         FakeIntervalTimer blinkTimer = new();
         FakeIntervalTimer restoreTimer = new();
         using PhysicalNumLockBlinkService service = new(hardware, blinkTimer, restoreTimer);
@@ -72,16 +110,16 @@ public sealed class PhysicalNumLockBlinkServiceTests
 
         Assert.IsTrue(result.Succeeded, result.DiagnosticMessage);
         Assert.IsFalse(service.Enabled);
-        Assert.IsTrue(hardware.NumLockOn);
+        Assert.IsFalse(hardware.IsLockKeyOn(PhysicalBlinkTargetKey.CapsLock));
         Assert.AreEqual(2, hardware.ToggleCount);
         Assert.IsFalse(blinkTimer.IsEnabled);
         Assert.IsFalse(restoreTimer.IsEnabled);
     }
 
     [TestMethod]
-    public void Dispose_RestoresOnWhenDisposedDuringPulse()
+    public void Dispose_RestoresTargetWhenDisposedDuringPulse()
     {
-        FakeNumLockHardware hardware = new(numLockOn: true);
+        FakeLockKeyHardware hardware = new(numLockOn: true);
         FakeIntervalTimer blinkTimer = new();
         FakeIntervalTimer restoreTimer = new();
         PhysicalNumLockBlinkService service = new(hardware, blinkTimer, restoreTimer);
@@ -90,7 +128,7 @@ public sealed class PhysicalNumLockBlinkServiceTests
         blinkTimer.Trigger();
         service.Dispose();
 
-        Assert.IsTrue(hardware.NumLockOn);
+        Assert.IsFalse(hardware.IsLockKeyOn(PhysicalBlinkTargetKey.CapsLock));
         Assert.AreEqual(2, hardware.ToggleCount);
         Assert.IsTrue(blinkTimer.Disposed);
         Assert.IsTrue(restoreTimer.Disposed);
@@ -99,7 +137,7 @@ public sealed class PhysicalNumLockBlinkServiceTests
     [TestMethod]
     public void BlinkTick_DoesNotStartSecondPulseWhilePulseIsActive()
     {
-        FakeNumLockHardware hardware = new(numLockOn: true);
+        FakeLockKeyHardware hardware = new(numLockOn: true);
         FakeIntervalTimer blinkTimer = new();
         FakeIntervalTimer restoreTimer = new();
         using PhysicalNumLockBlinkService service = new(hardware, blinkTimer, restoreTimer);
@@ -108,30 +146,41 @@ public sealed class PhysicalNumLockBlinkServiceTests
         blinkTimer.Trigger();
         blinkTimer.Trigger();
 
-        Assert.IsFalse(hardware.NumLockOn);
+        Assert.IsTrue(hardware.IsLockKeyOn(PhysicalBlinkTargetKey.CapsLock));
         Assert.AreEqual(1, hardware.ToggleCount);
     }
 
-    private sealed class FakeNumLockHardware : INumLockHardware
+    private sealed class FakeLockKeyHardware : ILockKeyHardware
     {
-        public FakeNumLockHardware(bool numLockOn)
+        private readonly Dictionary<PhysicalBlinkTargetKey, bool> _keyStates = new()
         {
-            NumLockOn = numLockOn;
+            [PhysicalBlinkTargetKey.CapsLock] = false,
+            [PhysicalBlinkTargetKey.NumLock] = false,
+            [PhysicalBlinkTargetKey.ScrollLock] = false
+        };
+
+        public FakeLockKeyHardware(bool numLockOn)
+        {
+            _keyStates[PhysicalBlinkTargetKey.NumLock] = numLockOn;
         }
 
-        public bool NumLockOn { get; private set; }
         public int ToggleCount { get; private set; }
 
         public bool IsNumLockOn()
         {
-            return NumLockOn;
+            return IsLockKeyOn(PhysicalBlinkTargetKey.NumLock);
         }
 
-        public ServiceResult ToggleNumLock()
+        public bool IsLockKeyOn(PhysicalBlinkTargetKey targetKey)
+        {
+            return _keyStates[targetKey];
+        }
+
+        public ServiceResult ToggleLockKey(PhysicalBlinkTargetKey targetKey)
         {
             ToggleCount++;
-            NumLockOn = !NumLockOn;
-            return ServiceResult.Success("Fake Num Lock toggled.");
+            _keyStates[targetKey] = !_keyStates[targetKey];
+            return ServiceResult.Success("Fake lock key toggled.");
         }
     }
 

@@ -56,7 +56,7 @@ public partial class MainWindow : Window
         InitializeComponent();
 
         _physicalNumLockBlinkService = new PhysicalNumLockBlinkService(
-            new Win32NumLockHardware(),
+            new Win32LockKeyHardware(),
             new DispatcherIntervalTimer(Dispatcher),
             new DispatcherIntervalTimer(Dispatcher));
 
@@ -193,6 +193,7 @@ public partial class MainWindow : Window
         };
         _trayMenuService.RunAtStartupChanged += (_, _) => ApplyStartupFromTray();
         _trayMenuService.PhysicalNumLockBlinkChanged += (_, _) => ApplyPhysicalNumLockBlinkFromTray();
+        _trayMenuService.PhysicalBlinkTargetChanged += (_, _) => ApplyPhysicalBlinkTargetFromTray();
         _trayMenuService.ResetConfigurationRequested += (_, _) => ConfirmAndResetConfiguration();
         _trayMenuService.ActiveColorChangeRequested += (_, _) => EditActiveColor();
         _trayMenuService.InactiveColorChangeRequested += (_, _) => EditInactiveColor();
@@ -287,6 +288,16 @@ public partial class MainWindow : Window
             return;
 
         ServiceResult result = _physicalNumLockBlinkService.SetEnabled(_trayMenuService.PhysicalNumLockBlinkWhenOnEnabled);
+        ReportNonFatalIssue(result, showDialog: !result.Succeeded);
+        RequestSaveConfiguration();
+    }
+
+    private void ApplyPhysicalBlinkTargetFromTray()
+    {
+        if (_trayMenuService is null)
+            return;
+
+        ServiceResult result = _physicalNumLockBlinkService.SetTargetKey(_trayMenuService.PhysicalBlinkTargetKey);
         ReportNonFatalIssue(result, showDialog: !result.Succeeded);
         RequestSaveConfiguration();
     }
@@ -540,6 +551,7 @@ public partial class MainWindow : Window
             RunAtStartupEnabled = _trayMenuService?.RunAtStartupEnabled ?? false,
             PhysicalNumLockBlinkWhenOnEnabled =
                 _trayMenuService?.PhysicalNumLockBlinkWhenOnEnabled ?? _physicalNumLockBlinkService.Enabled,
+            PhysicalBlinkTargetKey = _trayMenuService?.PhysicalBlinkTargetKey ?? _physicalNumLockBlinkService.TargetKey,
             Active = RgbaConfig.FromStyle(_activeStyle),
             Inactive = RgbaConfig.FromStyle(_inactiveStyle)
         };
@@ -591,7 +603,9 @@ public partial class MainWindow : Window
         _trayMenuService.SetTopMostEnabledSilently(config.TopMostEnabled);
         _trayMenuService.SetVisibleCheckedSilently(config.IsVisible);
         _trayMenuService.SetPhysicalNumLockBlinkWhenOnEnabledSilently(config.PhysicalNumLockBlinkWhenOnEnabled);
+        _trayMenuService.SetPhysicalBlinkTargetKeySilently(config.PhysicalBlinkTargetKey);
         SynchronizeStartupRegistration(config);
+        ReportNonFatalIssue(_physicalNumLockBlinkService.SetTargetKey(config.PhysicalBlinkTargetKey));
         ReportNonFatalIssue(_physicalNumLockBlinkService.SetEnabled(config.PhysicalNumLockBlinkWhenOnEnabled));
 
         _movementEnabled = config.MovementEnabled;
@@ -655,6 +669,8 @@ public partial class MainWindow : Window
             _trayMenuService?.SetTopMostEnabledSilently(true);
             _trayMenuService?.SetVisibleCheckedSilently(true);
             _trayMenuService?.SetPhysicalNumLockBlinkWhenOnEnabledSilently(false);
+            _trayMenuService?.SetPhysicalBlinkTargetKeySilently(PhysicalBlinkTargetKey.CapsLock);
+            ReportNonFatalIssue(_physicalNumLockBlinkService.SetTargetKey(PhysicalBlinkTargetKey.CapsLock));
             ReportNonFatalIssue(_physicalNumLockBlinkService.SetEnabled(enabled: false));
 
             Show();

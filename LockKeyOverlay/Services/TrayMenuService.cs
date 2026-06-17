@@ -13,8 +13,12 @@ internal sealed class TrayMenuService : IDisposable
     private readonly Forms.ToolStripMenuItem _topMostMenuItem;
     private readonly Forms.ToolStripMenuItem _runAtStartupMenuItem;
     private readonly Forms.ToolStripMenuItem _physicalNumLockBlinkMenuItem;
+    private readonly Forms.ToolStripMenuItem _capsLockBlinkTargetMenuItem;
+    private readonly Forms.ToolStripMenuItem _numLockBlinkTargetMenuItem;
+    private readonly Forms.ToolStripMenuItem _scrollLockBlinkTargetMenuItem;
 
     private bool _suppressEvents;
+    private PhysicalBlinkTargetKey _physicalBlinkTargetKey = PhysicalBlinkTargetKey.CapsLock;
 
     public TrayMenuService(bool runAtStartupEnabled, Drawing.Icon? icon = null)
     {
@@ -26,6 +30,11 @@ internal sealed class TrayMenuService : IDisposable
         _topMostMenuItem = CreateCheckedItem("Siempre encima", checkedState: true);
         _runAtStartupMenuItem = CreateCheckedItem("Iniciar con Windows", runAtStartupEnabled);
         _physicalNumLockBlinkMenuItem = CreateCheckedItem("Parpadear LED físico con Num Lock activo", checkedState: false);
+        Forms.ToolStripMenuItem physicalBlinkTargetMenuItem = new("LED físico usado");
+        _capsLockBlinkTargetMenuItem = CreateRadioItem("Caps Lock");
+        _numLockBlinkTargetMenuItem = CreateRadioItem("Num Lock");
+        _scrollLockBlinkTargetMenuItem = CreateRadioItem("Scroll Lock");
+        SetPhysicalBlinkTargetKeySilently(_physicalBlinkTargetKey);
 
         Forms.ToolStripMenuItem resetConfigMenuItem = new("Eliminar configuración...");
         Forms.ToolStripMenuItem activeColorMenuItem = new("Cambiar color estado activo...");
@@ -37,16 +46,24 @@ internal sealed class TrayMenuService : IDisposable
         _topMostMenuItem.CheckedChanged += (_, _) => RaiseIfAllowed(TopMostChanged);
         _runAtStartupMenuItem.CheckedChanged += (_, _) => RaiseIfAllowed(RunAtStartupChanged);
         _physicalNumLockBlinkMenuItem.CheckedChanged += (_, _) => RaiseIfAllowed(PhysicalNumLockBlinkChanged);
+        _capsLockBlinkTargetMenuItem.Click += (_, _) => SetPhysicalBlinkTargetKey(PhysicalBlinkTargetKey.CapsLock, raiseEvent: true);
+        _numLockBlinkTargetMenuItem.Click += (_, _) => SetPhysicalBlinkTargetKey(PhysicalBlinkTargetKey.NumLock, raiseEvent: true);
+        _scrollLockBlinkTargetMenuItem.Click += (_, _) => SetPhysicalBlinkTargetKey(PhysicalBlinkTargetKey.ScrollLock, raiseEvent: true);
         resetConfigMenuItem.Click += (_, _) => RaiseIfAllowed(ResetConfigurationRequested);
         activeColorMenuItem.Click += (_, _) => RaiseIfAllowed(ActiveColorChangeRequested);
         inactiveColorMenuItem.Click += (_, _) => RaiseIfAllowed(InactiveColorChangeRequested);
         exitMenuItem.Click += (_, _) => RaiseIfAllowed(ExitRequested);
+
+        physicalBlinkTargetMenuItem.DropDownItems.Add(_capsLockBlinkTargetMenuItem);
+        physicalBlinkTargetMenuItem.DropDownItems.Add(_numLockBlinkTargetMenuItem);
+        physicalBlinkTargetMenuItem.DropDownItems.Add(_scrollLockBlinkTargetMenuItem);
 
         _trayMenu.Items.Add(_visibleMenuItem);
         _trayMenu.Items.Add(_movementMenuItem);
         _trayMenu.Items.Add(_topMostMenuItem);
         _trayMenu.Items.Add(_runAtStartupMenuItem);
         _trayMenu.Items.Add(_physicalNumLockBlinkMenuItem);
+        _trayMenu.Items.Add(physicalBlinkTargetMenuItem);
         _trayMenu.Items.Add(new Forms.ToolStripSeparator());
         _trayMenu.Items.Add(activeColorMenuItem);
         _trayMenu.Items.Add(inactiveColorMenuItem);
@@ -70,6 +87,7 @@ internal sealed class TrayMenuService : IDisposable
     public event EventHandler? TopMostChanged;
     public event EventHandler? RunAtStartupChanged;
     public event EventHandler? PhysicalNumLockBlinkChanged;
+    public event EventHandler? PhysicalBlinkTargetChanged;
     public event EventHandler? ResetConfigurationRequested;
     public event EventHandler? ActiveColorChangeRequested;
     public event EventHandler? InactiveColorChangeRequested;
@@ -105,6 +123,12 @@ internal sealed class TrayMenuService : IDisposable
         set => SetChecked(_physicalNumLockBlinkMenuItem, value, raiseEvent: true);
     }
 
+    public PhysicalBlinkTargetKey PhysicalBlinkTargetKey
+    {
+        get => _physicalBlinkTargetKey;
+        set => SetPhysicalBlinkTargetKey(value, raiseEvent: true);
+    }
+
     public void SetVisibleCheckedSilently(bool checkedState)
     {
         SetChecked(_visibleMenuItem, checkedState, raiseEvent: false);
@@ -130,6 +154,11 @@ internal sealed class TrayMenuService : IDisposable
         SetChecked(_physicalNumLockBlinkMenuItem, checkedState, raiseEvent: false);
     }
 
+    public void SetPhysicalBlinkTargetKeySilently(PhysicalBlinkTargetKey targetKey)
+    {
+        SetPhysicalBlinkTargetKey(targetKey, raiseEvent: false);
+    }
+
     public void HideIcon()
     {
         _trayIcon.Visible = false;
@@ -152,6 +181,14 @@ internal sealed class TrayMenuService : IDisposable
         };
     }
 
+    private static Forms.ToolStripMenuItem CreateRadioItem(string text)
+    {
+        return new Forms.ToolStripMenuItem(text)
+        {
+            CheckOnClick = false
+        };
+    }
+
     private void SetChecked(Forms.ToolStripMenuItem item, bool checkedState, bool raiseEvent)
     {
         if (item.Checked == checkedState)
@@ -169,6 +206,39 @@ internal sealed class TrayMenuService : IDisposable
             if (!raiseEvent)
                 _suppressEvents = false;
         }
+    }
+
+    private void SetPhysicalBlinkTargetKey(PhysicalBlinkTargetKey targetKey, bool raiseEvent)
+    {
+        if (!Enum.IsDefined(targetKey))
+            targetKey = PhysicalBlinkTargetKey.CapsLock;
+
+        if (_physicalBlinkTargetKey == targetKey &&
+            _capsLockBlinkTargetMenuItem.Checked == (targetKey == PhysicalBlinkTargetKey.CapsLock) &&
+            _numLockBlinkTargetMenuItem.Checked == (targetKey == PhysicalBlinkTargetKey.NumLock) &&
+            _scrollLockBlinkTargetMenuItem.Checked == (targetKey == PhysicalBlinkTargetKey.ScrollLock))
+        {
+            return;
+        }
+
+        if (!raiseEvent)
+            _suppressEvents = true;
+
+        try
+        {
+            _physicalBlinkTargetKey = targetKey;
+            _capsLockBlinkTargetMenuItem.Checked = targetKey == PhysicalBlinkTargetKey.CapsLock;
+            _numLockBlinkTargetMenuItem.Checked = targetKey == PhysicalBlinkTargetKey.NumLock;
+            _scrollLockBlinkTargetMenuItem.Checked = targetKey == PhysicalBlinkTargetKey.ScrollLock;
+        }
+        finally
+        {
+            if (!raiseEvent)
+                _suppressEvents = false;
+        }
+
+        if (raiseEvent)
+            RaiseIfAllowed(PhysicalBlinkTargetChanged);
     }
 
     private void RaiseIfAllowed(EventHandler? handler)
