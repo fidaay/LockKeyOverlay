@@ -8,6 +8,7 @@ internal sealed class KeyboardHookService : IDisposable
     private const int WH_KEYBOARD_LL = 13;
     private const int WM_KEYUP = 0x0101;
     private const int WM_SYSKEYUP = 0x0105;
+    private const int LLKHF_INJECTED = 0x10;
 
     private readonly LowLevelKeyboardProc _keyboardProc;
     private IntPtr _keyboardHook = IntPtr.Zero;
@@ -72,12 +73,17 @@ internal sealed class KeyboardHookService : IDisposable
             {
                 KbdLlHookStruct keyInfo = Marshal.PtrToStructure<KbdLlHookStruct>(lParam);
 
-                if (keyInfo.vkCode == VK_NUMLOCK)
+                if (keyInfo.vkCode == VK_NUMLOCK && !IsInjectedKeyEvent(keyInfo.flags))
                     EventInvocation.Raise(NumLockReleased, this, EventArgs.Empty);
             }
         }
 
         return CallNextHookEx(_keyboardHook, nCode, wParam, lParam);
+    }
+
+    internal static bool IsInjectedKeyEvent(int flags)
+    {
+        return (flags & LLKHF_INJECTED) != 0;
     }
 
     [DllImport("user32.dll")]

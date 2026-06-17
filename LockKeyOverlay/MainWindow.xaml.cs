@@ -30,6 +30,7 @@ public partial class MainWindow : Window
     private readonly KeyboardHookService _keyboardHookService = new();
     private readonly ForegroundHookService _foregroundHookService = new();
     private readonly ScreenPlacementService _screenPlacementService = new();
+    private readonly PhysicalNumLockBlinkService _physicalNumLockBlinkService;
     private readonly DispatcherTimer _configSaveDebounceTimer;
 
     private WindowInteropService? _windowInteropService;
@@ -53,6 +54,11 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+
+        _physicalNumLockBlinkService = new PhysicalNumLockBlinkService(
+            new Win32NumLockHardware(),
+            new DispatcherIntervalTimer(Dispatcher),
+            new DispatcherIntervalTimer(Dispatcher));
 
         _configSaveDebounceTimer = new DispatcherTimer
         {
@@ -186,6 +192,7 @@ public partial class MainWindow : Window
             RequestSaveConfiguration();
         };
         _trayMenuService.RunAtStartupChanged += (_, _) => ApplyStartupFromTray();
+        _trayMenuService.PhysicalNumLockBlinkChanged += (_, _) => ApplyPhysicalNumLockBlinkFromTray();
         _trayMenuService.ResetConfigurationRequested += (_, _) => ConfirmAndResetConfiguration();
         _trayMenuService.ActiveColorChangeRequested += (_, _) => EditActiveColor();
         _trayMenuService.InactiveColorChangeRequested += (_, _) => EditInactiveColor();
@@ -193,6 +200,7 @@ public partial class MainWindow : Window
         {
             _allowExit = true;
             FlushPendingConfigurationSave();
+            ReportNonFatalIssue(_physicalNumLockBlinkService.StopAndRestore());
             _trayMenuService.HideIcon();
             Close();
         };
@@ -273,6 +281,16 @@ public partial class MainWindow : Window
         RequestSaveConfiguration();
     }
 
+    private void ApplyPhysicalNumLockBlinkFromTray()
+    {
+        if (_trayMenuService is null)
+            return;
+
+        ServiceResult result = _physicalNumLockBlinkService.SetEnabled(_trayMenuService.PhysicalNumLockBlinkWhenOnEnabled);
+        ReportNonFatalIssue(result, showDialog: !result.Succeeded);
+        RequestSaveConfiguration();
+    }
+
     internal void ShowFromExternalActivation()
     {
         if (!Dispatcher.CheckAccess())
@@ -311,6 +329,7 @@ public partial class MainWindow : Window
         if (IsLoaded)
             FlushPendingConfigurationSave();
 
+        ReportNonFatalIssue(_physicalNumLockBlinkService.StopAndRestore());
         _trayMenuService?.HideIcon();
         Close();
     }
@@ -519,6 +538,8 @@ public partial class MainWindow : Window
             MovementEnabled = _trayMenuService?.MovementEnabled ?? _movementEnabled,
             TopMostEnabled = _trayMenuService?.TopMostEnabled ?? Topmost,
             RunAtStartupEnabled = _trayMenuService?.RunAtStartupEnabled ?? false,
+            PhysicalNumLockBlinkWhenOnEnabled =
+                _trayMenuService?.PhysicalNumLockBlinkWhenOnEnabled ?? _physicalNumLockBlinkService.Enabled,
             Active = RgbaConfig.FromStyle(_activeStyle),
             Inactive = RgbaConfig.FromStyle(_inactiveStyle)
         };
@@ -569,7 +590,9 @@ public partial class MainWindow : Window
         _trayMenuService.SetMovementEnabledSilently(config.MovementEnabled);
         _trayMenuService.SetTopMostEnabledSilently(config.TopMostEnabled);
         _trayMenuService.SetVisibleCheckedSilently(config.IsVisible);
+        _trayMenuService.SetPhysicalNumLockBlinkWhenOnEnabledSilently(config.PhysicalNumLockBlinkWhenOnEnabled);
         SynchronizeStartupRegistration(config);
+        ReportNonFatalIssue(_physicalNumLockBlinkService.SetEnabled(config.PhysicalNumLockBlinkWhenOnEnabled));
 
         _movementEnabled = config.MovementEnabled;
         Cursor = _movementEnabled ? WpfCursors.SizeAll : WpfCursors.Arrow;
@@ -631,6 +654,8 @@ public partial class MainWindow : Window
             _trayMenuService?.SetMovementEnabledSilently(true);
             _trayMenuService?.SetTopMostEnabledSilently(true);
             _trayMenuService?.SetVisibleCheckedSilently(true);
+            _trayMenuService?.SetPhysicalNumLockBlinkWhenOnEnabledSilently(false);
+            ReportNonFatalIssue(_physicalNumLockBlinkService.SetEnabled(enabled: false));
 
             Show();
         }
@@ -756,6 +781,7 @@ public partial class MainWindow : Window
     {
         _allowExit = true;
         FlushPendingConfigurationSave();
+        ReportNonFatalIssue(_physicalNumLockBlinkService.StopAndRestore());
         _trayMenuService?.HideIcon();
     }
 
@@ -782,6 +808,7 @@ public partial class MainWindow : Window
 
         _keyboardHookService.Dispose();
         _foregroundHookService.Dispose();
+        _physicalNumLockBlinkService.Dispose();
 
         _trayMenuService?.Dispose();
         _trayMenuService = null;
