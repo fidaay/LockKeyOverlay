@@ -36,6 +36,14 @@ For a deeper read-only ASUS/TUF lighting capability report, run:
 .\scripts\diagnose-asus-lighting.ps1
 ```
 
+For read-only ACPIWMI device status probes based on known ASUS/Linux device IDs, run:
+
+```powershell
+.\scripts\probe-asus-wmi-status.ps1
+```
+
+See `docs/asus-lighting-reverse-engineering.md` for the current reverse-engineering notes.
+
 ## Publish
 
 ```powershell
