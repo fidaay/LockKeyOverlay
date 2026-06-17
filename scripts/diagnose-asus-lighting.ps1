@@ -163,7 +163,7 @@ function Write-TableOrNone {
         return
     }
 
-    $Rows | Format-Table -AutoSize
+    ($Rows | Format-Table -AutoSize | Out-String).TrimEnd() | Write-Host
 }
 
 Write-Section "ASUS packages"
