@@ -13,6 +13,7 @@ namespace LockKeyOverlay
     {
         private bool _updatingControls;
         private bool _hexValid = true;
+        private byte? _explicitHexAlpha;
 
         public byte SelectedR { get; private set; }
         public byte SelectedG { get; private set; }
@@ -42,6 +43,7 @@ namespace LockKeyOverlay
             if (_updatingControls)
                 return;
 
+            _explicitHexAlpha = null;
             ApplyUiFromSliders(updateHex: true);
         }
 
@@ -63,7 +65,7 @@ namespace LockKeyOverlay
             SelectedR = (byte)Math.Round(RedSlider.Value);
             SelectedG = (byte)Math.Round(GreenSlider.Value);
             SelectedB = (byte)Math.Round(BlueSlider.Value);
-            SelectedA = (byte)Math.Round((OpacitySlider.Value / 100.0) * 255.0);
+            SelectedA = ResolveSelectedAlpha(_explicitHexAlpha, OpacitySlider.Value);
 
             DialogResult = true;
         }
@@ -78,7 +80,7 @@ namespace LockKeyOverlay
             byte r = (byte)Math.Round(RedSlider.Value);
             byte g = (byte)Math.Round(GreenSlider.Value);
             byte b = (byte)Math.Round(BlueSlider.Value);
-            byte a = (byte)Math.Round((OpacitySlider.Value / 100.0) * 255.0);
+            byte a = ResolveSelectedAlpha(_explicitHexAlpha, OpacitySlider.Value);
 
             RedValueText.Text = r.ToString();
             GreenValueText.Text = g.ToString();
@@ -115,6 +117,7 @@ namespace LockKeyOverlay
 
             if (string.IsNullOrWhiteSpace(raw))
             {
+                _explicitHexAlpha = null;
                 _hexValid = true;
                 SetHexStatusNeutral();
                 return;
@@ -123,6 +126,7 @@ namespace LockKeyOverlay
             // Mientras escribe, no molestamos si está incompleto
             if (raw.Length < 6 || raw.Length == 7)
             {
+                _explicitHexAlpha = null;
                 _hexValid = false;
                 SetHexStatus("HEX incompleto...", WpfBrushes.DarkGoldenrod);
                 return;
@@ -130,6 +134,7 @@ namespace LockKeyOverlay
 
             if (raw.Length != 6 && raw.Length != 8)
             {
+                _explicitHexAlpha = null;
                 _hexValid = false;
                 SetHexStatus("HEX inválido", WpfBrushes.Firebrick);
                 return;
@@ -137,6 +142,7 @@ namespace LockKeyOverlay
 
             if (!ColorHexParser.IsHexString(raw))
             {
+                _explicitHexAlpha = null;
                 _hexValid = false;
                 SetHexStatus("HEX inválido", WpfBrushes.Firebrick);
                 return;
@@ -144,6 +150,7 @@ namespace LockKeyOverlay
 
             if (!ColorHexParser.TryParse(input, out ParsedHexColor parsed))
             {
+                _explicitHexAlpha = null;
                 _hexValid = false;
                 SetHexStatus("HEX inválido", WpfBrushes.Firebrick);
                 return;
@@ -160,9 +167,14 @@ namespace LockKeyOverlay
 
             if (parsed.A.HasValue)
             {
+                _explicitHexAlpha = parsed.A.Value;
                 double opacityPercent = Math.Round((parsed.A.Value / 255.0) * 100.0);
                 opacityPercent = Math.Max(0, Math.Min(100, opacityPercent));
                 OpacitySlider.Value = opacityPercent;
+            }
+            else
+            {
+                _explicitHexAlpha = null;
             }
 
             _updatingControls = false;
@@ -190,6 +202,17 @@ namespace LockKeyOverlay
             }
 
             return _hexValid;
+        }
+
+        internal static byte ResolveSelectedAlpha(byte? explicitHexAlpha, double opacityPercent)
+        {
+            return explicitHexAlpha ?? AlphaFromOpacityPercent(opacityPercent);
+        }
+
+        private static byte AlphaFromOpacityPercent(double opacityPercent)
+        {
+            opacityPercent = Math.Max(0.0, Math.Min(100.0, opacityPercent));
+            return (byte)Math.Round((opacityPercent / 100.0) * 255.0);
         }
 
         private void SetHexStatusNeutral()

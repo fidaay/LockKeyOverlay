@@ -29,8 +29,9 @@ internal sealed class StartupService
             if (string.IsNullOrWhiteSpace(exePath))
                 return ServiceResult<bool>.Failure(false, "Current process path is unavailable.");
 
-            string expected = Quote(exePath);
-            bool enabled = string.Equals(value, expected, StringComparison.OrdinalIgnoreCase);
+            bool enabled =
+                StartupCommandLine.TryParseExecutablePath(value, out string startupExecutablePath) &&
+                StartupCommandLine.PathsEqual(startupExecutablePath, exePath);
 
             return ServiceResult<bool>.Success(enabled, "Startup registry state read.");
         }
@@ -51,7 +52,7 @@ internal sealed class StartupService
                 if (string.IsNullOrWhiteSpace(exePath))
                     return ServiceResult.Failure("Current process path is unavailable.");
 
-                _startupRegistry.SetValue(StartupValueName, Quote(exePath));
+                _startupRegistry.SetValue(StartupValueName, StartupCommandLine.Build(exePath));
             }
             else
             {
@@ -66,10 +67,6 @@ internal sealed class StartupService
         }
     }
 
-    private static string Quote(string value)
-    {
-        return $"\"{value}\"";
-    }
 }
 
 internal interface IStartupRegistry

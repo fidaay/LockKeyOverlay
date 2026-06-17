@@ -31,6 +31,32 @@ public sealed class StartupServiceTests
     }
 
     [TestMethod]
+    public void IsEnabled_ReturnsTrueWhenRegistryHasUnquotedProcessPath()
+    {
+        FakeStartupRegistry registry = new();
+        registry.SetValue(StartupValueName, ProcessPath);
+        StartupService service = new(() => ProcessPath, registry);
+
+        ServiceResult<bool> result = service.IsEnabled();
+
+        Assert.IsTrue(result.Succeeded, result.Message);
+        Assert.IsTrue(result.Value);
+    }
+
+    [TestMethod]
+    public void IsEnabled_ReturnsTrueWhenRegistryHasQuotedProcessPathWithArguments()
+    {
+        FakeStartupRegistry registry = new();
+        registry.SetValue(StartupValueName, $"{Quote(ProcessPath)} --minimized");
+        StartupService service = new(() => ProcessPath, registry);
+
+        ServiceResult<bool> result = service.IsEnabled();
+
+        Assert.IsTrue(result.Succeeded, result.Message);
+        Assert.IsTrue(result.Value);
+    }
+
+    [TestMethod]
     public void IsEnabled_ReturnsFalseWhenRegistryPathDoesNotMatch()
     {
         FakeStartupRegistry registry = new();
@@ -52,7 +78,7 @@ public sealed class StartupServiceTests
         ServiceResult result = service.SetEnabled(enabled: true);
 
         Assert.IsTrue(result.Succeeded, result.DiagnosticMessage);
-        Assert.AreEqual(Quote(ProcessPath), registry.GetValue(StartupValueName));
+        Assert.AreEqual(StartupCommandLine.Build(ProcessPath), registry.GetValue(StartupValueName));
     }
 
     [TestMethod]

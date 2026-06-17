@@ -245,6 +245,30 @@ public partial class MainWindow : Window
         RequestSaveConfiguration();
     }
 
+    internal void ShowFromExternalActivation()
+    {
+        if (!Dispatcher.CheckAccess())
+        {
+            if (!Dispatcher.HasShutdownStarted && !Dispatcher.HasShutdownFinished)
+                Dispatcher.BeginInvoke(ShowFromExternalActivation);
+
+            return;
+        }
+
+        if (Dispatcher.HasShutdownStarted || Dispatcher.HasShutdownFinished)
+            return;
+
+        _trayMenuService?.SetVisibleCheckedSilently(true);
+
+        if (!IsVisible)
+            Show();
+
+        ApplyTopMostState();
+
+        if (IsLoaded)
+            FlushPendingConfigurationSave();
+    }
+
     private void ConfirmAndResetConfiguration()
     {
         var result = Forms.MessageBox.Show(
@@ -688,13 +712,20 @@ public partial class MainWindow : Window
 
     private void SystemEvents_SessionEnding(object sender, SessionEndingEventArgs e)
     {
-        if (!Dispatcher.CheckAccess())
-        {
-            Dispatcher.Invoke(HandleSessionEnding);
+        if (Dispatcher.HasShutdownStarted || Dispatcher.HasShutdownFinished)
             return;
-        }
 
-        HandleSessionEnding();
+        try
+        {
+            if (Dispatcher.CheckAccess())
+                HandleSessionEnding();
+            else
+                Dispatcher.Invoke(HandleSessionEnding, DispatcherPriority.Send);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or OperationCanceledException)
+        {
+            Debug.WriteLine($"Session ending handling was skipped: {ex.Message}");
+        }
     }
 
     private void HandleSessionEnding()
