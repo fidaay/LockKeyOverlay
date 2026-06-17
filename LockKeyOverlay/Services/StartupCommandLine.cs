@@ -50,12 +50,29 @@ internal static class StartupCommandLine
     {
         executablePath = string.Empty;
 
-        int exeIndex = commandLine.IndexOf(".exe", StringComparison.OrdinalIgnoreCase);
-        if (exeIndex >= 0)
+        int searchIndex = 0;
+        bool sawExeSuffix = false;
+
+        while (searchIndex < commandLine.Length)
         {
-            executablePath = commandLine[..(exeIndex + 4)].Trim();
-            return executablePath.Length > 0;
+            int exeIndex = commandLine.IndexOf(".exe", searchIndex, StringComparison.OrdinalIgnoreCase);
+            if (exeIndex < 0)
+                break;
+
+            sawExeSuffix = true;
+
+            int executableEndIndex = exeIndex + 4;
+            if (executableEndIndex == commandLine.Length || char.IsWhiteSpace(commandLine[executableEndIndex]))
+            {
+                executablePath = commandLine[..executableEndIndex].Trim();
+                return executablePath.Length > 0;
+            }
+
+            searchIndex = executableEndIndex;
         }
+
+        if (sawExeSuffix)
+            return false;
 
         int firstWhitespaceIndex = commandLine.IndexOfAny([' ', '\t']);
         executablePath = firstWhitespaceIndex >= 0

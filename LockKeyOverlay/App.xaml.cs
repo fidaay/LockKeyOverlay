@@ -1,6 +1,5 @@
 using System.Diagnostics;
 using System.Windows;
-using System.Windows.Threading;
 
 namespace LockKeyOverlay;
 
@@ -47,11 +46,6 @@ public partial class App : System.Windows.Application
 
     private void SingleInstanceCoordinator_ActivationRequested(object? sender, EventArgs e)
     {
-        if (Dispatcher.HasShutdownStarted || Dispatcher.HasShutdownFinished)
-            return;
-
-        Dispatcher.BeginInvoke(
-            () => _mainWindow?.ShowFromExternalActivation(),
-            DispatcherPriority.Normal);
+        DispatcherInvocation.TryBeginInvoke(Dispatcher, () => _mainWindow?.ShowFromExternalActivation());
     }
 }

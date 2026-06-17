@@ -34,6 +34,28 @@ public sealed class StartupCommandLineTests
     }
 
     [TestMethod]
+    public void TryParseExecutablePath_SkipsExeSuffixInsideFolderName()
+    {
+        bool parsed = StartupCommandLine.TryParseExecutablePath(
+            @"C:\tools.exe\LockKeyOverlay\LockKeyOverlay.exe --minimized",
+            out string executablePath);
+
+        Assert.IsTrue(parsed);
+        Assert.AreEqual(@"C:\tools.exe\LockKeyOverlay\LockKeyOverlay.exe", executablePath);
+    }
+
+    [TestMethod]
+    public void TryParseExecutablePath_RejectsExeOldAsExecutableSuffix()
+    {
+        bool parsed = StartupCommandLine.TryParseExecutablePath(
+            @"C:\Tools\LockKeyOverlay.exe.old --minimized",
+            out string executablePath);
+
+        Assert.IsFalse(parsed);
+        Assert.AreEqual(string.Empty, executablePath);
+    }
+
+    [TestMethod]
     public void TryParseExecutablePath_ReturnsFalseForEmptyValue()
     {
         bool parsed = StartupCommandLine.TryParseExecutablePath("   ", out string executablePath);

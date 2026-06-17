@@ -29,6 +29,7 @@ public partial class MainWindow : Window
     private readonly StartupService _startupService = new();
     private readonly KeyboardHookService _keyboardHookService = new();
     private readonly ForegroundHookService _foregroundHookService = new();
+    private readonly ScreenPlacementService _screenPlacementService = new();
     private readonly DispatcherTimer _configSaveDebounceTimer;
 
     private WindowInteropService? _windowInteropService;
@@ -181,7 +182,7 @@ public partial class MainWindow : Window
 
     private void KeyboardHookService_NumLockReleased(object? sender, EventArgs e)
     {
-        Dispatcher.BeginInvoke(UpdateNumLockIndicator);
+        DispatcherInvocation.TryBeginInvoke(Dispatcher, UpdateNumLockIndicator);
     }
 
     private void ForegroundHookService_ForegroundChanged(object? sender, EventArgs e)
@@ -195,7 +196,7 @@ public partial class MainWindow : Window
         if (_windowHandle == IntPtr.Zero)
             return;
 
-        Dispatcher.BeginInvoke(ApplyTopMostState);
+        DispatcherInvocation.TryBeginInvoke(Dispatcher, ApplyTopMostState);
     }
 
     private void ApplyVisibilityFromTray()
@@ -249,9 +250,7 @@ public partial class MainWindow : Window
     {
         if (!Dispatcher.CheckAccess())
         {
-            if (!Dispatcher.HasShutdownStarted && !Dispatcher.HasShutdownFinished)
-                Dispatcher.BeginInvoke(ShowFromExternalActivation);
-
+            DispatcherInvocation.TryBeginInvoke(Dispatcher, ShowFromExternalActivation);
             return;
         }
 
@@ -363,17 +362,16 @@ public partial class MainWindow : Window
             RequestSaveConfiguration();
     }
 
-    private (double ScaleX, double ScaleY) GetWindowDpiScale()
+    private DpiScale GetWindowDpiScale()
     {
         var source = PresentationSource.FromVisual(this);
 
         if (source?.CompositionTarget is null)
-            return (1.0, 1.0);
+            return DpiScale.One;
 
-        return (
+        return new DpiScale(
             source.CompositionTarget.TransformToDevice.M11,
-            source.CompositionTarget.TransformToDevice.M22
-        );
+            source.CompositionTarget.TransformToDevice.M22);
     }
 
     private Drawing.Point GetWindowTopLeftPx()
@@ -386,92 +384,59 @@ public partial class MainWindow : Window
         return new Drawing.Point(x, y);
     }
 
-    private static Forms.Screen? FindScreenByDeviceName(string? deviceName)
+    private static IReadOnlyList<ScreenSnapshot> CaptureScreens()
     {
-        if (string.IsNullOrWhiteSpace(deviceName))
-            return null;
+        return Forms.Screen.AllScreens
+            .Select(ToScreenSnapshot)
+            .ToArray();
+    }
 
-        foreach (var screen in Forms.Screen.AllScreens)
-        {
-            if (string.Equals(screen.DeviceName, deviceName, StringComparison.OrdinalIgnoreCase))
-                return screen;
-        }
+    private static ScreenSnapshot? CapturePrimaryScreen()
+    {
+        Forms.Screen? primary = Forms.Screen.PrimaryScreen;
+        return primary is null ? null : ToScreenSnapshot(primary);
+    }
 
-        return null;
+    private static ScreenSnapshot ToScreenSnapshot(Forms.Screen screen)
+    {
+        return new ScreenSnapshot(screen.DeviceName, screen.Bounds, screen.WorkingArea);
     }
 
     private void RestoreWindowPositionSafely(AppConfig config)
     {
-        var (scaleX, scaleY) = GetWindowDpiScale();
+        IReadOnlyList<ScreenSnapshot> screens = CaptureScreens();
+        ScreenSnapshot? primaryScreen = CapturePrimaryScreen();
 
-        double desiredLeftPx;
-        double desiredTopPx;
-
-        if (config.LeftPx.HasValue && config.TopPx.HasValue)
-        {
-            desiredLeftPx = config.LeftPx.Value;
-            desiredTopPx = config.TopPx.Value;
-        }
-        else
-        {
-            desiredLeftPx = config.Left * scaleX;
-            desiredTopPx = config.Top * scaleY;
-        }
-
-        Forms.Screen? savedScreen = FindScreenByDeviceName(config.ScreenDeviceName);
-
-        Forms.Screen? targetScreen =
-            savedScreen
-            ?? Forms.Screen.FromPoint(new Drawing.Point(
-                (int)Math.Round(desiredLeftPx),
-                (int)Math.Round(desiredTopPx)))
-            ?? Forms.Screen.PrimaryScreen;
-
-        if (targetScreen is null)
+        if (screens.Count == 0)
             return;
 
-        var boundsPx = targetScreen.Bounds;
+        WindowPlacement placement = _screenPlacementService.RestoreWindowPosition(
+            config,
+            screens,
+            primaryScreen,
+            GetWindowDpiScale(),
+            ActualWidth,
+            ActualHeight);
 
-        double windowWidthPx = Math.Max(1, ActualWidth * scaleX);
-        double windowHeightPx = Math.Max(1, ActualHeight * scaleY);
-
-        double minLeftPx = boundsPx.Left;
-        double minTopPx = boundsPx.Top;
-
-        double maxLeftPx = boundsPx.Right - windowWidthPx;
-        double maxTopPx = boundsPx.Bottom - windowHeightPx;
-
-        if (maxLeftPx < minLeftPx)
-            maxLeftPx = minLeftPx;
-
-        if (maxTopPx < minTopPx)
-            maxTopPx = minTopPx;
-
-        double clampedLeftPx = Math.Max(minLeftPx, Math.Min(desiredLeftPx, maxLeftPx));
-        double clampedTopPx = Math.Max(minTopPx, Math.Min(desiredTopPx, maxTopPx));
-
-        Left = clampedLeftPx / scaleX;
-        Top = clampedTopPx / scaleY;
+        Left = placement.Left;
+        Top = placement.Top;
     }
 
     private void CenterOverlayOnPrimaryScreen()
     {
-        var primary = Forms.Screen.PrimaryScreen;
+        ScreenSnapshot? primaryScreen = CapturePrimaryScreen();
 
-        if (primary is null)
+        if (primaryScreen is null)
             return;
 
-        var (scaleX, scaleY) = GetWindowDpiScale();
-        var workAreaPx = primary.WorkingArea;
+        WindowPlacement placement = _screenPlacementService.CenterInScreen(
+            primaryScreen.Value,
+            GetWindowDpiScale(),
+            ActualWidth,
+            ActualHeight);
 
-        double windowWidthPx = Math.Max(1, ActualWidth * scaleX);
-        double windowHeightPx = Math.Max(1, ActualHeight * scaleY);
-
-        double leftPx = workAreaPx.Left + ((workAreaPx.Width - windowWidthPx) / 2.0);
-        double topPx = workAreaPx.Top + ((workAreaPx.Height - windowHeightPx) / 2.0);
-
-        Left = leftPx / scaleX;
-        Top = topPx / scaleY;
+        Left = placement.Left;
+        Top = placement.Top;
     }
 
     private void SaveConfiguration()
@@ -712,20 +677,7 @@ public partial class MainWindow : Window
 
     private void SystemEvents_SessionEnding(object sender, SessionEndingEventArgs e)
     {
-        if (Dispatcher.HasShutdownStarted || Dispatcher.HasShutdownFinished)
-            return;
-
-        try
-        {
-            if (Dispatcher.CheckAccess())
-                HandleSessionEnding();
-            else
-                Dispatcher.Invoke(HandleSessionEnding, DispatcherPriority.Send);
-        }
-        catch (Exception ex) when (ex is InvalidOperationException or OperationCanceledException)
-        {
-            Debug.WriteLine($"Session ending handling was skipped: {ex.Message}");
-        }
+        DispatcherInvocation.TryInvoke(Dispatcher, HandleSessionEnding, DispatcherPriority.Send);
     }
 
     private void HandleSessionEnding()
