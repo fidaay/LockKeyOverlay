@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
+using Microsoft.Win32;
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Interop;
@@ -66,6 +67,8 @@ public partial class MainWindow : Window
         IsVisibleChanged += Window_IsVisibleChanged;
         Closing += Window_Closing;
         Closed += Window_Closed;
+
+        SystemEvents.SessionEnding += SystemEvents_SessionEnding;
     }
 
     protected override void OnSourceInitialized(EventArgs e)
@@ -161,6 +164,7 @@ public partial class MainWindow : Window
         _trayMenuService.ExitRequested += (_, _) =>
         {
             _allowExit = true;
+            FlushPendingConfigurationSave();
             _trayMenuService.HideIcon();
             Close();
         };
@@ -515,7 +519,6 @@ public partial class MainWindow : Window
         _trayMenuService.SetMovementEnabledSilently(config.MovementEnabled);
         _trayMenuService.SetTopMostEnabledSilently(config.TopMostEnabled);
         _trayMenuService.SetVisibleCheckedSilently(config.IsVisible);
-        _trayMenuService.SetRunAtStartupEnabledSilently(config.RunAtStartupEnabled);
 
         _movementEnabled = config.MovementEnabled;
         Cursor = _movementEnabled ? WpfCursors.SizeAll : WpfCursors.Arrow;
@@ -527,9 +530,6 @@ public partial class MainWindow : Window
             Show();
         else
             Hide();
-
-        ServiceResult startupResult = _startupService.SetEnabled(config.RunAtStartupEnabled);
-        ReportNonFatalIssue(startupResult, showDialog: !startupResult.Succeeded);
     }
 
     private void ApplyDefaultConfiguration()
@@ -686,8 +686,30 @@ public partial class MainWindow : Window
         FlushPendingConfigurationSave();
     }
 
+    private void SystemEvents_SessionEnding(object sender, SessionEndingEventArgs e)
+    {
+        if (!Dispatcher.CheckAccess())
+        {
+            Dispatcher.Invoke(HandleSessionEnding);
+            return;
+        }
+
+        HandleSessionEnding();
+    }
+
+    private void HandleSessionEnding()
+    {
+        _allowExit = true;
+        FlushPendingConfigurationSave();
+        _trayMenuService?.HideIcon();
+    }
+
     private void Window_Closed(object? sender, EventArgs e)
     {
+        _configSaveDebounceTimer.Stop();
+        _configSaveDebounceTimer.Tick -= ConfigSaveDebounceTimer_Tick;
+        SystemEvents.SessionEnding -= SystemEvents_SessionEnding;
+
         _keyboardHookService.NumLockReleased -= KeyboardHookService_NumLockReleased;
         _foregroundHookService.ForegroundChanged -= ForegroundHookService_ForegroundChanged;
 

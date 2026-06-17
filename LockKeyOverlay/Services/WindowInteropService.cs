@@ -11,7 +11,6 @@ internal sealed class WindowInteropService
     private const uint SWP_NOMOVE = 0x0002;
     private const uint SWP_NOSIZE = 0x0001;
     private const uint SWP_NOACTIVATE = 0x0010;
-    private const uint SWP_SHOWWINDOW = 0x0040;
 
     private static readonly IntPtr HWND_TOPMOST = new(-1);
     private static readonly IntPtr HWND_NOTOPMOST = new(-2);
@@ -47,7 +46,7 @@ internal sealed class WindowInteropService
             0,
             0,
             0,
-            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
 
         return applied
             ? ServiceResult.Success("Topmost state applied.")

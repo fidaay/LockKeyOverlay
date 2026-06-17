@@ -5,22 +5,22 @@ namespace LockKeyOverlay;
 
 internal sealed class StartupService
 {
-    private const string StartupRunKeyPath = @"Software\Microsoft\Windows\CurrentVersion\Run";
     private const string StartupValueName = "LockKeyOverlay";
 
     private readonly Func<string?> _processPathProvider;
+    private readonly IStartupRegistry _startupRegistry;
 
-    public StartupService(Func<string?>? processPathProvider = null)
+    public StartupService(Func<string?>? processPathProvider = null, IStartupRegistry? startupRegistry = null)
     {
         _processPathProvider = processPathProvider ?? (() => Environment.ProcessPath);
+        _startupRegistry = startupRegistry ?? new CurrentUserRunStartupRegistry();
     }
 
     public ServiceResult<bool> IsEnabled()
     {
         try
         {
-            using RegistryKey? key = Registry.CurrentUser.OpenSubKey(StartupRunKeyPath, writable: false);
-            string? value = key?.GetValue(StartupValueName) as string;
+            string? value = _startupRegistry.GetValue(StartupValueName);
 
             if (string.IsNullOrWhiteSpace(value))
                 return ServiceResult<bool>.Success(false, "Startup registry value is not set.");
@@ -44,11 +44,6 @@ internal sealed class StartupService
     {
         try
         {
-            using RegistryKey? key = Registry.CurrentUser.CreateSubKey(StartupRunKeyPath);
-
-            if (key is null)
-                return ServiceResult.Failure("Startup registry key could not be opened.");
-
             if (enabled)
             {
                 string? exePath = _processPathProvider();
@@ -56,11 +51,11 @@ internal sealed class StartupService
                 if (string.IsNullOrWhiteSpace(exePath))
                     return ServiceResult.Failure("Current process path is unavailable.");
 
-                key.SetValue(StartupValueName, Quote(exePath));
+                _startupRegistry.SetValue(StartupValueName, Quote(exePath));
             }
             else
             {
-                key.DeleteValue(StartupValueName, throwOnMissingValue: false);
+                _startupRegistry.DeleteValue(StartupValueName);
             }
 
             return ServiceResult.Success("Startup registry state updated.");
@@ -74,5 +69,43 @@ internal sealed class StartupService
     private static string Quote(string value)
     {
         return $"\"{value}\"";
+    }
+}
+
+internal interface IStartupRegistry
+{
+    string? GetValue(string valueName);
+    void SetValue(string valueName, string value);
+    void DeleteValue(string valueName);
+}
+
+internal sealed class CurrentUserRunStartupRegistry : IStartupRegistry
+{
+    private const string StartupRunKeyPath = @"Software\Microsoft\Windows\CurrentVersion\Run";
+
+    public string? GetValue(string valueName)
+    {
+        using RegistryKey? key = Registry.CurrentUser.OpenSubKey(StartupRunKeyPath, writable: false);
+        return key?.GetValue(valueName) as string;
+    }
+
+    public void SetValue(string valueName, string value)
+    {
+        using RegistryKey? key = Registry.CurrentUser.CreateSubKey(StartupRunKeyPath);
+
+        if (key is null)
+            throw new IOException("Startup registry key could not be opened.");
+
+        key.SetValue(valueName, value);
+    }
+
+    public void DeleteValue(string valueName)
+    {
+        using RegistryKey? key = Registry.CurrentUser.CreateSubKey(StartupRunKeyPath);
+
+        if (key is null)
+            throw new IOException("Startup registry key could not be opened.");
+
+        key.DeleteValue(valueName, throwOnMissingValue: false);
     }
 }
