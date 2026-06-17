@@ -569,6 +569,7 @@ public partial class MainWindow : Window
         _trayMenuService.SetMovementEnabledSilently(config.MovementEnabled);
         _trayMenuService.SetTopMostEnabledSilently(config.TopMostEnabled);
         _trayMenuService.SetVisibleCheckedSilently(config.IsVisible);
+        SynchronizeStartupRegistration(config);
 
         _movementEnabled = config.MovementEnabled;
         Cursor = _movementEnabled ? WpfCursors.SizeAll : WpfCursors.Arrow;
@@ -580,6 +581,39 @@ public partial class MainWindow : Window
             Show();
         else
             Hide();
+    }
+
+    private void SynchronizeStartupRegistration(AppConfig config)
+    {
+        if (_trayMenuService is null)
+            return;
+
+        ServiceResult<StartupRegistrationState> startupStateResult = _startupService.GetRegistrationState();
+        ReportNonFatalIssue(startupStateResult.ToServiceResult());
+
+        if (!startupStateResult.Succeeded)
+            return;
+
+        StartupRegistrationState startupState = startupStateResult.Value;
+        _trayMenuService.SetRunAtStartupEnabledSilently(startupState.IsEnabled);
+
+        if (!StartupRegistrationRepair.ShouldRepair(config, startupState, GetCurrentExecutableFileName()))
+            return;
+
+        ServiceResult repairResult = _startupService.SetEnabled(enabled: true);
+        ReportNonFatalIssue(repairResult);
+
+        if (repairResult.Succeeded)
+            _trayMenuService.SetRunAtStartupEnabledSilently(true);
+    }
+
+    private static string GetCurrentExecutableFileName()
+    {
+        string? fileName = Path.GetFileName(Environment.ProcessPath);
+
+        return string.IsNullOrWhiteSpace(fileName)
+            ? "LockKeyOverlay.exe"
+            : fileName;
     }
 
     private void ApplyDefaultConfiguration()

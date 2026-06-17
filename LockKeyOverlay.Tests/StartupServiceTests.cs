@@ -70,6 +70,39 @@ public sealed class StartupServiceTests
     }
 
     [TestMethod]
+    public void IsEnabled_ReturnsFalseWhenWindowsStartupApprovalIsDisabled()
+    {
+        FakeStartupRegistry registry = new();
+        registry.SetValue(StartupValueName, Quote(ProcessPath));
+        FakeStartupApprovalRegistry approvalRegistry = new()
+        {
+            State = StartupApprovalState.Disabled
+        };
+        StartupService service = new(() => ProcessPath, registry, approvalRegistry);
+
+        ServiceResult<bool> result = service.IsEnabled();
+
+        Assert.IsTrue(result.Succeeded, result.Message);
+        Assert.IsFalse(result.Value);
+    }
+
+    [TestMethod]
+    public void GetRegistrationState_ReturnsRegisteredExecutablePath()
+    {
+        const string oldPath = @"C:\Old\LockKeyOverlay\LockKeyOverlay.exe";
+        FakeStartupRegistry registry = new();
+        registry.SetValue(StartupValueName, Quote(oldPath));
+        StartupService service = new(() => ProcessPath, registry);
+
+        ServiceResult<StartupRegistrationState> result = service.GetRegistrationState();
+
+        Assert.IsTrue(result.Succeeded, result.Message);
+        Assert.IsFalse(result.Value.IsEnabled);
+        Assert.IsTrue(result.Value.HasRegistryValue);
+        Assert.AreEqual(oldPath, result.Value.RegisteredExecutablePath);
+    }
+
+    [TestMethod]
     public void SetEnabled_WritesQuotedProcessPath()
     {
         FakeStartupRegistry registry = new();
@@ -79,6 +112,22 @@ public sealed class StartupServiceTests
 
         Assert.IsTrue(result.Succeeded, result.DiagnosticMessage);
         Assert.AreEqual(StartupCommandLine.Build(ProcessPath), registry.GetValue(StartupValueName));
+    }
+
+    [TestMethod]
+    public void SetEnabledTrue_ClearsWindowsStartupApprovalValue()
+    {
+        FakeStartupRegistry registry = new();
+        FakeStartupApprovalRegistry approvalRegistry = new()
+        {
+            State = StartupApprovalState.Disabled
+        };
+        StartupService service = new(() => ProcessPath, registry, approvalRegistry);
+
+        ServiceResult result = service.SetEnabled(enabled: true);
+
+        Assert.IsTrue(result.Succeeded, result.DiagnosticMessage);
+        Assert.IsTrue(approvalRegistry.ClearValueCalled);
     }
 
     [TestMethod]
@@ -128,6 +177,22 @@ public sealed class StartupServiceTests
         public void DeleteValue(string valueName)
         {
             _values.Remove(valueName);
+        }
+    }
+
+    private sealed class FakeStartupApprovalRegistry : IStartupApprovalRegistry
+    {
+        public StartupApprovalState State { get; init; } = StartupApprovalState.Unknown;
+        public bool ClearValueCalled { get; private set; }
+
+        public StartupApprovalState GetState(string valueName)
+        {
+            return State;
+        }
+
+        public void ClearValue(string valueName)
+        {
+            ClearValueCalled = true;
         }
     }
 }
