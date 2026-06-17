@@ -44,6 +44,14 @@ For read-only ACPIWMI device status probes based on known ASUS/Linux device IDs,
 
 This includes the standard and extended `MoreBYTE` status reads, and does not write lighting settings.
 
+For deeper static reverse-engineering evidence from the installed ASUS binaries and connected devices, run:
+
+```powershell
+.\scripts\reverse-engineer-asus-lighting.ps1
+```
+
+This inspects PE exports/imports, relevant binary strings, TUF Aura Core config, ASUS WMI classes, and connected keyboard/HID devices. It is read-only.
+
 See `docs/asus-lighting-reverse-engineering.md` for the current reverse-engineering notes.
 
 ## Publish

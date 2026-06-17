@@ -42,16 +42,41 @@ These IDs line up with the Linux `asus-wmi` driver definitions for ASUS TUF RGB 
 - Microsoft Dynamic Lighting requires HID LampArray-compatible devices. The relevant Windows API can target virtual keys only when a LampArray device reports virtual-key support; this machine reports no LampArray devices at all.
 - ASUS support documentation treats Num Lock indicator LEDs as toggle-state indicators, while notebook backlight documentation exposes keyboard-backlight brightness/effect controls separately.
 
+## Static Binary Inspection
+
+Run:
+
+```powershell
+.\scripts\reverse-engineer-asus-lighting.ps1
+```
+
+Observed on the test machine:
+
+- `Aura.exe` imports HID and device-enumeration APIs: `HidD_SetFeature`, `HidD_GetFeature`, `SetupDiEnumDeviceInterfaces`, `SetupDiGetDeviceInterfaceDetailW`, and `CreateFileW`.
+- `Aura.exe` contains strings for `ACPI\ASUS7000`, `InitRGBKBDevice`, `ExecCmd2RGBKB`, `GetRGBKBStatus`, `NB_Keyboard_LED`, `SetFeature (0x5D 0x41)`, and `SetFeature (0x5D 0x5)`.
+- Those strings indicate the official ASUS binary has a USB/HID RGB keyboard code path for machines that expose the matching ASUS RGB device.
+- This test machine does not expose that matching device: no `ACPI\ASUS7000`, no `VID_0B05`, and no known Aura Core USB keyboard IDs are present in PnP.
+- `ACPIWMI.dll` imports generic file/device/COM helpers such as `CreateFileW`, `DeviceIoControl`, `CoCreateInstance`, and `CoSetProxyBlanket`, and exports only the ASUS WMI helper functions already probed.
+- `ACPIWMI.dll` did not surface strings for `RGBKB`, `ACPI\ASUS7000`, `HidD_SetFeature`, `WASD`, `QWER`, `4ZONE`, `NumLock`, or `Num Lock`.
+- Both `Aura.exe` and `ACPIWMI.dll` were searched for `NumLock`, `Num Lock`, `VK_NUMLOCK`, `LampArray`, and `SetColorsForKeys`; no matching strings were found.
+
+Interpretation:
+
+- The official ASUS package has two relevant conceptual paths: a HID RGB keyboard path and an ACPI/WMI path.
+- The HID RGB path is not usable on this test machine because the required ASUS RGB HID/USB device is not enumerated.
+- The ACPI/WMI path is usable and is the path already used by LockKeyOverlay, but it exposes whole-keyboard/coarse TUF RGB controls, not Num Lock-specific addressing.
+
 ## Evidence Matrix
 
 | Candidate path | Local result | Num Lock-only viability |
 | --- | --- | --- |
 | Windows Dynamic Lighting / LampArray | Zero devices reported | Not viable on this machine |
 | LampArray virtual-key mapping | No LampArray device to inspect | Not viable on this machine |
-| ASUS Aura Core USB HID | No `VID_0B05` / known Aura Core USB keyboard IDs present | Not viable on this machine |
+| ASUS Aura Core USB HID | `Aura.exe` contains HID RGB code, but no matching `ACPI\ASUS7000`, `VID_0B05`, or known Aura Core USB device is present | Not viable on this machine |
 | ASUS ACPIWMI TUF RGB | `KbdBacklight`, `TufRgbMode`, and `TufRgbState` present | Whole-keyboard/coarse control only |
 | ASUS ACPIWMI LED slots | `Led1` through `Led6` not present | Not viable through known LED IDs |
 | TUFAuraCore config/UI | All-keyboard, WASD, QWER, and four-zone concepts only | No Num Lock section or key index |
+| Static string/import search | HID RGB path exists in ASUS binary, but no Num Lock/per-key symbols or local device path were found | No exposed Num Lock path found |
 | Generic keyboard toggle LED | Tied to Num Lock state through keyboard behavior | Can blink only by toggling real Num Lock state |
 
 ## Conclusion
