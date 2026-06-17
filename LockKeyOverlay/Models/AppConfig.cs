@@ -13,7 +13,7 @@ internal sealed class AppConfig
     public bool MovementEnabled { get; set; } = true;
     public bool TopMostEnabled { get; set; } = true;
     public bool RunAtStartupEnabled { get; set; }
-    public bool PhysicalNumLockBlinkWhenOnEnabled { get; set; }
+    public bool AsusAuraBacklightBlinkWhenNumLockOnEnabled { get; set; }
 
     public RgbaConfig? Active { get; set; }
     public RgbaConfig? Inactive { get; set; }

@@ -12,7 +12,7 @@ internal sealed class TrayMenuService : IDisposable
     private readonly Forms.ToolStripMenuItem _movementMenuItem;
     private readonly Forms.ToolStripMenuItem _topMostMenuItem;
     private readonly Forms.ToolStripMenuItem _runAtStartupMenuItem;
-    private readonly Forms.ToolStripMenuItem _physicalNumLockBlinkMenuItem;
+    private readonly Forms.ToolStripMenuItem _asusAuraBacklightBlinkMenuItem;
 
     private bool _suppressEvents;
 
@@ -25,7 +25,7 @@ internal sealed class TrayMenuService : IDisposable
         _movementMenuItem = CreateCheckedItem("Activar movimiento", checkedState: true);
         _topMostMenuItem = CreateCheckedItem("Siempre encima", checkedState: true);
         _runAtStartupMenuItem = CreateCheckedItem("Iniciar con Windows", runAtStartupEnabled);
-        _physicalNumLockBlinkMenuItem = CreateCheckedItem("Parpadear LED físico con Num Lock activo", checkedState: false);
+        _asusAuraBacklightBlinkMenuItem = CreateCheckedItem("Parpadear backlight ASUS con Num Lock activo", checkedState: false);
 
         Forms.ToolStripMenuItem resetConfigMenuItem = new("Eliminar configuración...");
         Forms.ToolStripMenuItem activeColorMenuItem = new("Cambiar color estado activo...");
@@ -36,7 +36,7 @@ internal sealed class TrayMenuService : IDisposable
         _movementMenuItem.CheckedChanged += (_, _) => RaiseIfAllowed(MovementChanged);
         _topMostMenuItem.CheckedChanged += (_, _) => RaiseIfAllowed(TopMostChanged);
         _runAtStartupMenuItem.CheckedChanged += (_, _) => RaiseIfAllowed(RunAtStartupChanged);
-        _physicalNumLockBlinkMenuItem.CheckedChanged += (_, _) => RaiseIfAllowed(PhysicalNumLockBlinkChanged);
+        _asusAuraBacklightBlinkMenuItem.CheckedChanged += (_, _) => RaiseIfAllowed(AsusAuraBacklightBlinkChanged);
         resetConfigMenuItem.Click += (_, _) => RaiseIfAllowed(ResetConfigurationRequested);
         activeColorMenuItem.Click += (_, _) => RaiseIfAllowed(ActiveColorChangeRequested);
         inactiveColorMenuItem.Click += (_, _) => RaiseIfAllowed(InactiveColorChangeRequested);
@@ -46,7 +46,7 @@ internal sealed class TrayMenuService : IDisposable
         _trayMenu.Items.Add(_movementMenuItem);
         _trayMenu.Items.Add(_topMostMenuItem);
         _trayMenu.Items.Add(_runAtStartupMenuItem);
-        _trayMenu.Items.Add(_physicalNumLockBlinkMenuItem);
+        _trayMenu.Items.Add(_asusAuraBacklightBlinkMenuItem);
         _trayMenu.Items.Add(new Forms.ToolStripSeparator());
         _trayMenu.Items.Add(activeColorMenuItem);
         _trayMenu.Items.Add(inactiveColorMenuItem);
@@ -69,7 +69,7 @@ internal sealed class TrayMenuService : IDisposable
     public event EventHandler? MovementChanged;
     public event EventHandler? TopMostChanged;
     public event EventHandler? RunAtStartupChanged;
-    public event EventHandler? PhysicalNumLockBlinkChanged;
+    public event EventHandler? AsusAuraBacklightBlinkChanged;
     public event EventHandler? ResetConfigurationRequested;
     public event EventHandler? ActiveColorChangeRequested;
     public event EventHandler? InactiveColorChangeRequested;
@@ -99,10 +99,10 @@ internal sealed class TrayMenuService : IDisposable
         set => SetChecked(_runAtStartupMenuItem, value, raiseEvent: true);
     }
 
-    public bool PhysicalNumLockBlinkWhenOnEnabled
+    public bool AsusAuraBacklightBlinkWhenNumLockOnEnabled
     {
-        get => _physicalNumLockBlinkMenuItem.Checked;
-        set => SetChecked(_physicalNumLockBlinkMenuItem, value, raiseEvent: true);
+        get => _asusAuraBacklightBlinkMenuItem.Checked;
+        set => SetChecked(_asusAuraBacklightBlinkMenuItem, value, raiseEvent: true);
     }
 
     public void SetVisibleCheckedSilently(bool checkedState)
@@ -125,9 +125,9 @@ internal sealed class TrayMenuService : IDisposable
         SetChecked(_runAtStartupMenuItem, checkedState, raiseEvent: false);
     }
 
-    public void SetPhysicalNumLockBlinkWhenOnEnabledSilently(bool checkedState)
+    public void SetAsusAuraBacklightBlinkWhenNumLockOnEnabledSilently(bool checkedState)
     {
-        SetChecked(_physicalNumLockBlinkMenuItem, checkedState, raiseEvent: false);
+        SetChecked(_asusAuraBacklightBlinkMenuItem, checkedState, raiseEvent: false);
     }
 
     public void HideIcon()

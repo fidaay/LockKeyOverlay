@@ -18,6 +18,10 @@ dotnet test
 
 The active project is `LockKeyOverlay`. The old `NumLockIndicator` WinForms prototype was removed from this workspace.
 
+## ASUS TUF Backlight Blink
+
+The tray option `Parpadear backlight ASUS con Num Lock activo` is experimental and only targets the keyboard backlight through ASUS Aura Core / Armoury Crate's `ACPIWMI.dll`. It does not add Caps Lock or Scroll Lock behavior.
+
 ## Publish
 
 ```powershell

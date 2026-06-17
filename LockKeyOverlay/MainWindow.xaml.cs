@@ -30,7 +30,7 @@ public partial class MainWindow : Window
     private readonly KeyboardHookService _keyboardHookService = new();
     private readonly ForegroundHookService _foregroundHookService = new();
     private readonly ScreenPlacementService _screenPlacementService = new();
-    private readonly PhysicalNumLockBlinkService _physicalNumLockBlinkService;
+    private readonly AsusAuraBacklightBlinkService _asusAuraBacklightBlinkService;
     private readonly DispatcherTimer _configSaveDebounceTimer;
 
     private WindowInteropService? _windowInteropService;
@@ -55,8 +55,9 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
 
-        _physicalNumLockBlinkService = new PhysicalNumLockBlinkService(
-            new Win32NumLockHardware(),
+        _asusAuraBacklightBlinkService = new AsusAuraBacklightBlinkService(
+            new Win32NumLockStateReader(),
+            new AsusAuraBacklightController(),
             new DispatcherIntervalTimer(Dispatcher),
             new DispatcherIntervalTimer(Dispatcher));
 
@@ -192,7 +193,7 @@ public partial class MainWindow : Window
             RequestSaveConfiguration();
         };
         _trayMenuService.RunAtStartupChanged += (_, _) => ApplyStartupFromTray();
-        _trayMenuService.PhysicalNumLockBlinkChanged += (_, _) => ApplyPhysicalNumLockBlinkFromTray();
+        _trayMenuService.AsusAuraBacklightBlinkChanged += (_, _) => ApplyAsusAuraBacklightBlinkFromTray();
         _trayMenuService.ResetConfigurationRequested += (_, _) => ConfirmAndResetConfiguration();
         _trayMenuService.ActiveColorChangeRequested += (_, _) => EditActiveColor();
         _trayMenuService.InactiveColorChangeRequested += (_, _) => EditInactiveColor();
@@ -200,7 +201,7 @@ public partial class MainWindow : Window
         {
             _allowExit = true;
             FlushPendingConfigurationSave();
-            ReportNonFatalIssue(_physicalNumLockBlinkService.StopAndRestore());
+            ReportNonFatalIssue(_asusAuraBacklightBlinkService.StopAndRestore());
             _trayMenuService.HideIcon();
             Close();
         };
@@ -281,12 +282,18 @@ public partial class MainWindow : Window
         RequestSaveConfiguration();
     }
 
-    private void ApplyPhysicalNumLockBlinkFromTray()
+    private void ApplyAsusAuraBacklightBlinkFromTray()
     {
         if (_trayMenuService is null)
             return;
 
-        ServiceResult result = _physicalNumLockBlinkService.SetEnabled(_trayMenuService.PhysicalNumLockBlinkWhenOnEnabled);
+        bool requestedState = _trayMenuService.AsusAuraBacklightBlinkWhenNumLockOnEnabled;
+        ServiceResult result = _asusAuraBacklightBlinkService.SetEnabled(
+            requestedState);
+
+        if (!result.Succeeded)
+            _trayMenuService.SetAsusAuraBacklightBlinkWhenNumLockOnEnabledSilently(_asusAuraBacklightBlinkService.Enabled);
+
         ReportNonFatalIssue(result, showDialog: !result.Succeeded);
         RequestSaveConfiguration();
     }
@@ -329,7 +336,7 @@ public partial class MainWindow : Window
         if (IsLoaded)
             FlushPendingConfigurationSave();
 
-        ReportNonFatalIssue(_physicalNumLockBlinkService.StopAndRestore());
+        ReportNonFatalIssue(_asusAuraBacklightBlinkService.StopAndRestore());
         _trayMenuService?.HideIcon();
         Close();
     }
@@ -538,8 +545,8 @@ public partial class MainWindow : Window
             MovementEnabled = _trayMenuService?.MovementEnabled ?? _movementEnabled,
             TopMostEnabled = _trayMenuService?.TopMostEnabled ?? Topmost,
             RunAtStartupEnabled = _trayMenuService?.RunAtStartupEnabled ?? false,
-            PhysicalNumLockBlinkWhenOnEnabled =
-                _trayMenuService?.PhysicalNumLockBlinkWhenOnEnabled ?? _physicalNumLockBlinkService.Enabled,
+            AsusAuraBacklightBlinkWhenNumLockOnEnabled =
+                _trayMenuService?.AsusAuraBacklightBlinkWhenNumLockOnEnabled ?? _asusAuraBacklightBlinkService.Enabled,
             Active = RgbaConfig.FromStyle(_activeStyle),
             Inactive = RgbaConfig.FromStyle(_inactiveStyle)
         };
@@ -590,9 +597,14 @@ public partial class MainWindow : Window
         _trayMenuService.SetMovementEnabledSilently(config.MovementEnabled);
         _trayMenuService.SetTopMostEnabledSilently(config.TopMostEnabled);
         _trayMenuService.SetVisibleCheckedSilently(config.IsVisible);
-        _trayMenuService.SetPhysicalNumLockBlinkWhenOnEnabledSilently(config.PhysicalNumLockBlinkWhenOnEnabled);
+        _trayMenuService.SetAsusAuraBacklightBlinkWhenNumLockOnEnabledSilently(
+            config.AsusAuraBacklightBlinkWhenNumLockOnEnabled);
         SynchronizeStartupRegistration(config);
-        ReportNonFatalIssue(_physicalNumLockBlinkService.SetEnabled(config.PhysicalNumLockBlinkWhenOnEnabled));
+        ServiceResult blinkResult = _asusAuraBacklightBlinkService.SetEnabled(config.AsusAuraBacklightBlinkWhenNumLockOnEnabled);
+        if (!blinkResult.Succeeded)
+            _trayMenuService.SetAsusAuraBacklightBlinkWhenNumLockOnEnabledSilently(_asusAuraBacklightBlinkService.Enabled);
+
+        ReportNonFatalIssue(blinkResult);
 
         _movementEnabled = config.MovementEnabled;
         Cursor = _movementEnabled ? WpfCursors.SizeAll : WpfCursors.Arrow;
@@ -654,8 +666,8 @@ public partial class MainWindow : Window
             _trayMenuService?.SetMovementEnabledSilently(true);
             _trayMenuService?.SetTopMostEnabledSilently(true);
             _trayMenuService?.SetVisibleCheckedSilently(true);
-            _trayMenuService?.SetPhysicalNumLockBlinkWhenOnEnabledSilently(false);
-            ReportNonFatalIssue(_physicalNumLockBlinkService.SetEnabled(enabled: false));
+            _trayMenuService?.SetAsusAuraBacklightBlinkWhenNumLockOnEnabledSilently(false);
+            ReportNonFatalIssue(_asusAuraBacklightBlinkService.SetEnabled(enabled: false));
 
             Show();
         }
@@ -781,7 +793,7 @@ public partial class MainWindow : Window
     {
         _allowExit = true;
         FlushPendingConfigurationSave();
-        ReportNonFatalIssue(_physicalNumLockBlinkService.StopAndRestore());
+        ReportNonFatalIssue(_asusAuraBacklightBlinkService.StopAndRestore());
         _trayMenuService?.HideIcon();
     }
 
@@ -808,7 +820,7 @@ public partial class MainWindow : Window
 
         _keyboardHookService.Dispose();
         _foregroundHookService.Dispose();
-        _physicalNumLockBlinkService.Dispose();
+        _asusAuraBacklightBlinkService.Dispose();
 
         _trayMenuService?.Dispose();
         _trayMenuService = null;

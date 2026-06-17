@@ -27,7 +27,7 @@ public sealed class ConfigServiceTests
             MovementEnabled = false,
             TopMostEnabled = true,
             RunAtStartupEnabled = true,
-            PhysicalNumLockBlinkWhenOnEnabled = true,
+            AsusAuraBacklightBlinkWhenNumLockOnEnabled = true,
             Active = new RgbaConfig { R = 255, G = 140, B = 0, A = 217 },
             Inactive = new RgbaConfig { R = 30, G = 144, B = 255, A = 191 }
         };
@@ -48,14 +48,14 @@ public sealed class ConfigServiceTests
         Assert.AreEqual(expected.TopMostEnabled, loadResult.Config.TopMostEnabled);
         Assert.AreEqual(expected.RunAtStartupEnabled, loadResult.Config.RunAtStartupEnabled);
         Assert.AreEqual(
-            expected.PhysicalNumLockBlinkWhenOnEnabled,
-            loadResult.Config.PhysicalNumLockBlinkWhenOnEnabled);
+            expected.AsusAuraBacklightBlinkWhenNumLockOnEnabled,
+            loadResult.Config.AsusAuraBacklightBlinkWhenNumLockOnEnabled);
         Assert.AreEqual(expected.Active!.ToStyle(), loadResult.Config.Active!.ToStyle());
         Assert.AreEqual(expected.Inactive!.ToStyle(), loadResult.Config.Inactive!.ToStyle());
     }
 
     [TestMethod]
-    public void Load_DefaultsPhysicalBlinkToFalseWhenLegacyConfigDoesNotIncludeIt()
+    public void Load_DefaultsAsusAuraBacklightBlinkToFalseWhenLegacyConfigDoesNotIncludeIt()
     {
         ConfigService service = CreateService();
 
@@ -75,7 +75,7 @@ public sealed class ConfigServiceTests
 
         Assert.AreEqual(ConfigLoadStatus.Loaded, result.Status);
         Assert.IsNotNull(result.Config);
-        Assert.IsFalse(result.Config.PhysicalNumLockBlinkWhenOnEnabled);
+        Assert.IsFalse(result.Config.AsusAuraBacklightBlinkWhenNumLockOnEnabled);
     }
 
     [TestMethod]
