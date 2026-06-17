@@ -57,3 +57,13 @@ internal readonly record struct ServiceResult<T>(
             : ServiceResult.Failure(Message, Exception, NativeErrorCode);
     }
 }
+
+internal sealed class ServiceResultEventArgs : EventArgs
+{
+    public ServiceResultEventArgs(ServiceResult result)
+    {
+        Result = result;
+    }
+
+    public ServiceResult Result { get; }
+}

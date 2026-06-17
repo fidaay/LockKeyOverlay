@@ -84,6 +84,62 @@ public sealed class AsusAuraBacklightBlinkServiceTests
     }
 
     [TestMethod]
+    public void BlinkTick_ReportsFailureWhenPulseCannotStart()
+    {
+        FakeNumLockStateReader numLock = new(numLockOn: true);
+        FakeKeyboardBacklightController controller = new();
+        controller.SetStaticColorResults.Enqueue(ServiceResult.Failure("Pulse failed."));
+        FakeIntervalTimer blinkTimer = new();
+        FakeIntervalTimer restoreTimer = new();
+        using AsusAuraBacklightBlinkService service = new(numLock, controller, blinkTimer, restoreTimer);
+        List<ServiceResult> issues = [];
+        service.IssueReported += (_, e) => issues.Add(e.Result);
+
+        service.SetEnabled(enabled: true);
+        blinkTimer.Trigger();
+
+        Assert.HasCount(1, issues);
+        Assert.AreEqual("Pulse failed.", issues[0].Message);
+        Assert.IsFalse(restoreTimer.IsEnabled);
+    }
+
+    [TestMethod]
+    public void RestoreTick_FailedRestoreKeepsPulsePendingAndReportsIssue()
+    {
+        FakeNumLockStateReader numLock = new(numLockOn: true);
+        FakeKeyboardBacklightController controller = new()
+        {
+            RestoreColor = new RgbColor(10, 20, 30)
+        };
+        controller.SetStaticColorResults.Enqueue(ServiceResult.Success("Off applied."));
+        controller.SetStaticColorResults.Enqueue(ServiceResult.Failure("Restore failed."));
+        controller.SetStaticColorResults.Enqueue(ServiceResult.Success("Restore applied."));
+        FakeIntervalTimer blinkTimer = new();
+        FakeIntervalTimer restoreTimer = new();
+        using AsusAuraBacklightBlinkService service = new(numLock, controller, blinkTimer, restoreTimer);
+        List<ServiceResult> issues = [];
+        service.IssueReported += (_, e) => issues.Add(e.Result);
+
+        service.SetEnabled(enabled: true);
+        blinkTimer.Trigger();
+        restoreTimer.Trigger();
+
+        Assert.HasCount(1, issues);
+        Assert.AreEqual("Restore failed.", issues[0].Message);
+        Assert.IsTrue(restoreTimer.IsEnabled);
+        CollectionAssert.AreEqual(
+            new[] { new RgbColor(0, 0, 0), new RgbColor(10, 20, 30) },
+            controller.AppliedColors);
+
+        restoreTimer.Trigger();
+
+        CollectionAssert.AreEqual(
+            new[] { new RgbColor(0, 0, 0), new RgbColor(10, 20, 30), new RgbColor(10, 20, 30) },
+            controller.AppliedColors);
+        Assert.IsFalse(restoreTimer.IsEnabled);
+    }
+
+    [TestMethod]
     public void SetEnabledFalse_RestoresWhenDisabledDuringPulse()
     {
         FakeNumLockStateReader numLock = new(numLockOn: true);
@@ -147,6 +203,7 @@ public sealed class AsusAuraBacklightBlinkServiceTests
         public RgbColor RestoreColor { get; init; } = new(255, 43, 0);
         public bool PrepareCalled { get; private set; }
         public List<RgbColor> AppliedColors { get; } = [];
+        public Queue<ServiceResult> SetStaticColorResults { get; } = [];
 
         public ServiceResult Prepare()
         {
@@ -162,7 +219,9 @@ public sealed class AsusAuraBacklightBlinkServiceTests
         public ServiceResult SetStaticColor(RgbColor color)
         {
             AppliedColors.Add(color);
-            return ServiceResult.Success("Color set.");
+            return SetStaticColorResults.Count > 0
+                ? SetStaticColorResults.Dequeue()
+                : ServiceResult.Success("Color set.");
         }
     }
 

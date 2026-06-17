@@ -19,4 +19,21 @@ public sealed class EventInvocationTests
 
         Assert.AreEqual(2, calls);
     }
+
+    [TestMethod]
+    public void Raise_GenericEventContinuesAfterFailingSubscriber()
+    {
+        int calls = 0;
+        EventHandler<ServiceResultEventArgs>? handler = null;
+        handler += (_, _) =>
+        {
+            calls++;
+            throw new InvalidOperationException("Subscriber failed.");
+        };
+        handler += (_, _) => calls++;
+
+        EventInvocation.Raise(handler, this, new ServiceResultEventArgs(ServiceResult.Failure("Issue.")));
+
+        Assert.AreEqual(2, calls);
+    }
 }

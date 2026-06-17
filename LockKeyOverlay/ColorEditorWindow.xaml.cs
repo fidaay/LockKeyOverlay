@@ -32,6 +32,7 @@ namespace LockKeyOverlay
             GreenSlider.Value = g;
             BlueSlider.Value = b;
             OpacitySlider.Value = Math.Round(a * 100.0 / 255.0);
+            _explicitHexAlpha = a;
 
             _updatingControls = false;
 
@@ -43,7 +44,9 @@ namespace LockKeyOverlay
             if (_updatingControls)
                 return;
 
-            _explicitHexAlpha = null;
+            _explicitHexAlpha = UpdateExplicitAlphaAfterSliderChange(
+                changedOpacity: ReferenceEquals(sender, OpacitySlider),
+                _explicitHexAlpha);
             ApplyUiFromSliders(updateHex: true);
         }
 
@@ -93,7 +96,7 @@ namespace LockKeyOverlay
             if (updateHex)
             {
                 _updatingControls = true;
-                HexTextBox.Text = $"#{r:X2}{g:X2}{b:X2}";
+                HexTextBox.Text = BuildHexText(r, g, b, a, _explicitHexAlpha, OpacitySlider.Value);
                 _updatingControls = false;
 
                 SetHexStatusNeutral();
@@ -209,7 +212,28 @@ namespace LockKeyOverlay
             return explicitHexAlpha ?? AlphaFromOpacityPercent(opacityPercent);
         }
 
-        private static byte AlphaFromOpacityPercent(double opacityPercent)
+        internal static byte? UpdateExplicitAlphaAfterSliderChange(bool changedOpacity, byte? explicitHexAlpha)
+        {
+            return changedOpacity ? null : explicitHexAlpha;
+        }
+
+        internal static string BuildHexText(
+            byte r,
+            byte g,
+            byte b,
+            byte resolvedAlpha,
+            byte? explicitHexAlpha,
+            double opacityPercent)
+        {
+            bool includeAlpha = explicitHexAlpha.HasValue &&
+                AlphaFromOpacityPercent(opacityPercent) != resolvedAlpha;
+
+            return includeAlpha
+                ? $"#{r:X2}{g:X2}{b:X2}{resolvedAlpha:X2}"
+                : $"#{r:X2}{g:X2}{b:X2}";
+        }
+
+        internal static byte AlphaFromOpacityPercent(double opacityPercent)
         {
             opacityPercent = Math.Max(0.0, Math.Min(100.0, opacityPercent));
             return (byte)Math.Round((opacityPercent / 100.0) * 255.0);

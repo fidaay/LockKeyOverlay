@@ -35,6 +35,8 @@ internal sealed class AsusAuraBacklightBlinkService : IDisposable
         _restoreTimer.Tick += RestoreTimer_Tick;
     }
 
+    public event EventHandler<ServiceResultEventArgs>? IssueReported;
+
     public bool Enabled => _enabled;
 
     public ServiceResult SetEnabled(bool enabled)
@@ -118,18 +120,35 @@ internal sealed class AsusAuraBacklightBlinkService : IDisposable
         if (!_pulseActive && !forceRestore)
             return ServiceResult.Success("No ASUS Aura backlight pulse to restore.");
 
+        ServiceResult result = _backlightController.SetStaticColor(_restoreColor);
+        if (!result.Succeeded)
+        {
+            if (_enabled && !_restoreTimer.IsEnabled)
+                _restoreTimer.Start();
+
+            return result;
+        }
+
         _pulseActive = false;
-        return _backlightController.SetStaticColor(_restoreColor);
+        return ServiceResult.Success("ASUS Aura backlight best-effort restore applied.");
     }
 
     private void BlinkTimer_Tick(object? sender, EventArgs e)
     {
-        TryStartPulse();
+        ReportIfFailed(TryStartPulse());
     }
 
     private void RestoreTimer_Tick(object? sender, EventArgs e)
     {
-        RestoreAfterPulse();
+        ReportIfFailed(RestoreAfterPulse());
+    }
+
+    private void ReportIfFailed(ServiceResult result)
+    {
+        if (result.Succeeded)
+            return;
+
+        EventInvocation.Raise(IssueReported, this, new ServiceResultEventArgs(result));
     }
 }
 

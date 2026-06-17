@@ -69,6 +69,7 @@ public partial class MainWindow : Window
 
         _keyboardHookService.NumLockReleased += KeyboardHookService_NumLockReleased;
         _foregroundHookService.ForegroundChanged += ForegroundHookService_ForegroundChanged;
+        _asusAuraBacklightBlinkService.IssueReported += AsusAuraBacklightBlinkService_IssueReported;
 
         LocationChanged += Window_LocationChanged;
         IsVisibleChanged += Window_IsVisibleChanged;
@@ -233,6 +234,11 @@ public partial class MainWindow : Window
             return;
 
         DispatcherInvocation.TryBeginInvoke(Dispatcher, ApplyTopMostState);
+    }
+
+    private void AsusAuraBacklightBlinkService_IssueReported(object? sender, ServiceResultEventArgs e)
+    {
+        ReportNonFatalIssue(e.Result);
     }
 
     private void ApplyVisibilityFromTray()
@@ -668,6 +674,10 @@ public partial class MainWindow : Window
             _trayMenuService?.SetVisibleCheckedSilently(true);
             _trayMenuService?.SetAsusAuraBacklightBlinkWhenNumLockOnEnabledSilently(false);
             ReportNonFatalIssue(_asusAuraBacklightBlinkService.SetEnabled(enabled: false));
+            ServiceResult startupResetResult = DefaultConfigurationStartupReset.DisableRunAtStartup(
+                _startupService.SetEnabled,
+                enabled => _trayMenuService?.SetRunAtStartupEnabledSilently(enabled));
+            ReportNonFatalIssue(startupResetResult, showDialog: !startupResetResult.Succeeded);
 
             Show();
         }
@@ -817,6 +827,7 @@ public partial class MainWindow : Window
 
         _keyboardHookService.NumLockReleased -= KeyboardHookService_NumLockReleased;
         _foregroundHookService.ForegroundChanged -= ForegroundHookService_ForegroundChanged;
+        _asusAuraBacklightBlinkService.IssueReported -= AsusAuraBacklightBlinkService_IssueReported;
 
         _keyboardHookService.Dispose();
         _foregroundHookService.Dispose();
