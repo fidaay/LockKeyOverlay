@@ -35,9 +35,29 @@ internal static class Program
             });
         }
 
+        if (args.Length == 3 &&
+            string.Equals(args[0], "get-status-more", StringComparison.OrdinalIgnoreCase) &&
+            TryParseUInt32(args[1], out uint moreDeviceId) &&
+            TryParseUInt32(args[2], out uint moreArgument))
+        {
+            return ExecuteWithWmi(() =>
+            {
+                byte result = AsWMI_NB_GetDeviceStatus_MoreBYTE(
+                    moreDeviceId,
+                    moreArgument,
+                    out uint status1,
+                    out uint status2,
+                    out uint status3);
+
+                Console.Out.WriteLine(
+                    $"device=0x{moreDeviceId:X8}; argument=0x{moreArgument:X8}; result={result}; status1=0x{status1:X8}; status2=0x{status2:X8}; status3=0x{status3:X8}");
+            });
+        }
+
         Console.Error.WriteLine("Usage:");
         Console.Error.WriteLine("  LockKeyOverlay.AsusAuraHelper.exe set-static <red> <green> <blue>");
         Console.Error.WriteLine("  LockKeyOverlay.AsusAuraHelper.exe get-status <device-id>");
+        Console.Error.WriteLine("  LockKeyOverlay.AsusAuraHelper.exe get-status-more <device-id> <argument>");
         return 2;
     }
 
@@ -103,4 +123,12 @@ internal static class Program
 
     [DllImport("ACPIWMI.dll", CallingConvention = CallingConvention.StdCall)]
     private static extern void AsWMI_NB_GetDeviceStatus(uint deviceId, out uint status);
+
+    [DllImport("ACPIWMI.dll", CallingConvention = CallingConvention.StdCall)]
+    private static extern byte AsWMI_NB_GetDeviceStatus_MoreBYTE(
+        uint deviceId,
+        uint argument,
+        out uint status1,
+        out uint status2,
+        out uint status3);
 }

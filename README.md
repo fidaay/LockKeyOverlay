@@ -42,6 +42,8 @@ For read-only ACPIWMI device status probes based on known ASUS/Linux device IDs,
 .\scripts\probe-asus-wmi-status.ps1
 ```
 
+This includes the standard and extended `MoreBYTE` status reads, and does not write lighting settings.
+
 See `docs/asus-lighting-reverse-engineering.md` for the current reverse-engineering notes.
 
 ## Publish

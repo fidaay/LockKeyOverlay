@@ -1,7 +1,9 @@
 [CmdletBinding()]
 param(
     [string]$Configuration = "Release",
-    [string[]]$DeviceId
+    [string[]]$DeviceId,
+    [string[]]$MoreByteArgument = @("0", "1"),
+    [switch]$SkipMoreByte
 )
 
 $ErrorActionPreference = "Stop"
@@ -148,8 +150,54 @@ $rows |
     Select-Object Name, DeviceId, RawHex, Present, Status, Unknown, Brightness, MaxRaw |
     Format-Table -AutoSize
 
+if (-not $SkipMoreByte) {
+    Write-Host ""
+    Write-Host "Read-only MoreBYTE status probe"
+
+    $moreRows = foreach ($item in $requested) {
+        foreach ($argumentValue in $MoreByteArgument) {
+            $argument = Convert-ToUInt32 $argumentValue
+            $output = & $helperExe get-status-more ("0x{0:X8}" -f $item.Id) ("0x{0:X8}" -f $argument) 2>&1
+            $text = ($output | Out-String).Trim()
+            $match = [regex]::Match(
+                $text,
+                "result=(?<result>\d+); status1=0x(?<status1>[0-9A-Fa-f]{8}); status2=0x(?<status2>[0-9A-Fa-f]{8}); status3=0x(?<status3>[0-9A-Fa-f]{8})")
+
+            if (-not $match.Success) {
+                [pscustomobject]@{
+                    Name      = $item.Name
+                    DeviceId  = "0x{0:X8}" -f $item.Id
+                    Argument  = "0x{0:X8}" -f $argument
+                    Result    = $null
+                    Status1   = $null
+                    Status2   = $null
+                    Status3   = $null
+                    Output    = $text
+                }
+                continue
+            }
+
+            [pscustomobject]@{
+                Name      = $item.Name
+                DeviceId  = "0x{0:X8}" -f $item.Id
+                Argument  = "0x{0:X8}" -f $argument
+                Result    = [int]$match.Groups["result"].Value
+                Status1   = "0x{0:X8}" -f ([Convert]::ToUInt32($match.Groups["status1"].Value, 16))
+                Status2   = "0x{0:X8}" -f ([Convert]::ToUInt32($match.Groups["status2"].Value, 16))
+                Status3   = "0x{0:X8}" -f ([Convert]::ToUInt32($match.Groups["status3"].Value, 16))
+                Output    = $text
+            }
+        }
+    }
+
+    $moreRows |
+        Select-Object Name, DeviceId, Argument, Result, Status1, Status2, Status3 |
+        Format-Table -AutoSize
+}
+
 Write-Host ""
 Write-Host "Notes:"
-Write-Host "- This script only calls AsWMI_NB_GetDeviceStatus; it does not write lighting settings."
+Write-Host "- This script only calls read-only ACPIWMI status functions; it does not write lighting settings."
+Write-Host "- Unless -SkipMoreByte is passed, it includes AsWMI_NB_GetDeviceStatus_MoreBYTE."
 Write-Host "- For TUF RGB, Linux documents 0x00100056/0x0010005A as RGB mode/color and 0x00100057 as RGB state."
 Write-Host "- A present TUF RGB mode still represents coarse keyboard RGB control, not Num Lock per-key control."

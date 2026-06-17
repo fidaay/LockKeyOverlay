@@ -189,8 +189,8 @@ Write-Section "LampArray / Dynamic Lighting"
 Write-Section "Relevant PnP devices"
 $pnpDevices = Get-PnpDevice -PresentOnly |
     Where-Object {
-        $_.InstanceId -match "ASUS7000|ASUS9001|ASUS2018|VID_0B05|ATK4002" -or
-        $_.FriendlyName -match "Aura|RGB|Lighting|ASUS"
+        $_.InstanceId -match "ASUS7000|ASUS9001|ASUS2018|VID_0B05|ATK4002|MSFT0001|PNP0C14" -or
+        $_.FriendlyName -match "Aura|RGB|Lighting|ASUS|Keyboard"
     } |
     Select-Object Status, Class, FriendlyName, InstanceId
 Write-TableOrNone $pnpDevices
@@ -199,6 +199,21 @@ $rgbHid = $pnpDevices | Where-Object { $_.InstanceId -match "ASUS7000|VID_0B05" 
 if ($null -eq $rgbHid -or @($rgbHid).Count -eq 0) {
     Write-Host "No connected ASUS RGB HID device was found."
 }
+
+$knownAuraCoreUsbIds = @("VID_0B05&PID_1854", "VID_0B05&PID_1869", "VID_0B05&PID_1866", "VID_0B05&PID_19B6", "VID_0B05&PID_1A30")
+$knownAuraCoreMatches = $pnpDevices | Where-Object {
+    $instanceId = $_.InstanceId
+    $knownAuraCoreUsbIds | Where-Object { $instanceId -match [regex]::Escape($_) }
+}
+if ($null -eq $knownAuraCoreMatches -or @($knownAuraCoreMatches).Count -eq 0) {
+    Write-Host "No known ASUS Aura Core USB keyboard IDs were found: $($knownAuraCoreUsbIds -join ', ')."
+}
+
+Write-Section "Keyboard and HID baseline"
+$inputDevices = Get-PnpDevice -PresentOnly |
+    Where-Object { $_.Class -in @("Keyboard", "HIDClass") } |
+    Select-Object Status, Class, FriendlyName, InstanceId
+Write-TableOrNone $inputDevices
 
 Write-Section "ASUS WMI metadata"
 $asusWmiClass = Get-CimClass -Namespace root\WMI -ClassName AsusAtkWmi_WMNB -ErrorAction SilentlyContinue
