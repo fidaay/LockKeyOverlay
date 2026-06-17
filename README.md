@@ -30,6 +30,12 @@ To check whether Windows exposes per-key RGB control through Dynamic Lighting / 
 
 If the diagnostic reports no LampArray devices, Num Lock-only RGB blinking is not available through the Windows per-key lighting API on that machine.
 
+For a deeper read-only ASUS/TUF lighting capability report, run:
+
+```powershell
+.\scripts\diagnose-asus-lighting.ps1
+```
+
 ## Publish
 
 ```powershell
