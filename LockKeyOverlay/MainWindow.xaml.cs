@@ -144,12 +144,40 @@ public partial class MainWindow : Window
         return bitmap;
     }
 
+    private static string GetAssetPath(string fileName)
+    {
+        return Path.Combine(AppContext.BaseDirectory, "Assets", fileName);
+    }
+
+    private Drawing.Icon? LoadTrayIcon()
+    {
+        string iconPath = GetAssetPath("lockkeyoverlay.ico");
+
+        try
+        {
+            if (!File.Exists(iconPath))
+                throw new FileNotFoundException($"No se encontró el archivo: {iconPath}");
+
+            return new Drawing.Icon(iconPath);
+        }
+        catch (Exception ex) when (
+            ex is IOException
+                or UnauthorizedAccessException
+                or ArgumentException
+                or NotSupportedException
+                or System.Runtime.InteropServices.ExternalException)
+        {
+            ReportNonFatalIssue(ServiceResult.Failure($"No se pudo cargar el icono del tray: {iconPath}", ex));
+            return null;
+        }
+    }
+
     private void ConfigureTray()
     {
         ServiceResult<bool> startupState = _startupService.IsEnabled();
         ReportNonFatalIssue(startupState.ToServiceResult());
 
-        _trayMenuService = new TrayMenuService(startupState.Value);
+        _trayMenuService = new TrayMenuService(startupState.Value, LoadTrayIcon());
         _trayMenuService.VisibleChanged += (_, _) => ApplyVisibilityFromTray();
         _trayMenuService.MovementChanged += (_, _) => ApplyMovementFromTray();
         _trayMenuService.TopMostChanged += (_, _) =>

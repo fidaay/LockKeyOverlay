@@ -7,6 +7,7 @@ internal sealed class TrayMenuService : IDisposable
 {
     private readonly Forms.ContextMenuStrip _trayMenu;
     private readonly Forms.NotifyIcon _trayIcon;
+    private readonly Drawing.Icon? _ownedIcon;
     private readonly Forms.ToolStripMenuItem _visibleMenuItem;
     private readonly Forms.ToolStripMenuItem _movementMenuItem;
     private readonly Forms.ToolStripMenuItem _topMostMenuItem;
@@ -14,8 +15,9 @@ internal sealed class TrayMenuService : IDisposable
 
     private bool _suppressEvents;
 
-    public TrayMenuService(bool runAtStartupEnabled)
+    public TrayMenuService(bool runAtStartupEnabled, Drawing.Icon? icon = null)
     {
+        _ownedIcon = icon;
         _trayMenu = new Forms.ContextMenuStrip();
 
         _visibleMenuItem = CreateCheckedItem("Ventana visible", checkedState: true);
@@ -50,7 +52,7 @@ internal sealed class TrayMenuService : IDisposable
 
         _trayIcon = new Forms.NotifyIcon
         {
-            Icon = Drawing.SystemIcons.Information,
+            Icon = _ownedIcon ?? Drawing.SystemIcons.Application,
             Text = "LockKeyOverlay",
             Visible = true,
             ContextMenuStrip = _trayMenu
@@ -121,6 +123,7 @@ internal sealed class TrayMenuService : IDisposable
     {
         _trayIcon.Visible = false;
         _trayIcon.Dispose();
+        _ownedIcon?.Dispose();
         _trayMenu.Dispose();
     }
 
