@@ -30,4 +30,22 @@ public sealed class StartupWindowVisibilityTests
 
         Assert.IsTrue(shouldShow);
     }
+
+    [TestMethod]
+    public void ResolveMovementEnabledOnStartup_ReturnsFalseWhenLoadedConfigDisablesMovement()
+    {
+        ConfigLoadResult result = ConfigLoadResult.Loaded(new AppConfig { MovementEnabled = false });
+
+        bool movementEnabled = StartupWindowVisibility.ResolveMovementEnabledOnStartup(result);
+
+        Assert.IsFalse(movementEnabled);
+    }
+
+    [TestMethod]
+    public void ResolveMovementEnabledOnStartup_ReturnsTrueWhenConfigIsUnavailable()
+    {
+        bool movementEnabled = StartupWindowVisibility.ResolveMovementEnabledOnStartup(null);
+
+        Assert.IsTrue(movementEnabled);
+    }
 }

@@ -1,5 +1,6 @@
 using Microsoft.Win32;
 using System.IO;
+using System.Diagnostics;
 
 namespace LockKeyOverlay;
 
@@ -88,8 +89,19 @@ internal sealed class StartupService
                 if (string.IsNullOrWhiteSpace(exePath))
                     return ServiceResult.Failure("Current process path is unavailable.");
 
+                string? previousValue = _startupRegistry.GetValue(StartupValueName);
+                bool hadPreviousValue = !string.IsNullOrWhiteSpace(previousValue);
+
                 _startupRegistry.SetValue(StartupValueName, StartupCommandLine.Build(exePath));
-                _startupApprovalRegistry.ClearValue(StartupValueName);
+                try
+                {
+                    _startupApprovalRegistry.ClearValue(StartupValueName);
+                }
+                catch (Exception ex) when (ex is UnauthorizedAccessException or System.Security.SecurityException or IOException)
+                {
+                    RestoreStartupValueAfterFailedEnable(previousValue, hadPreviousValue);
+                    return ServiceResult.Failure("Startup registry state could not be updated.", ex);
+                }
             }
             else
             {
@@ -101,6 +113,21 @@ internal sealed class StartupService
         catch (Exception ex) when (ex is UnauthorizedAccessException or System.Security.SecurityException or IOException)
         {
             return ServiceResult.Failure("Startup registry state could not be updated.", ex);
+        }
+    }
+
+    private void RestoreStartupValueAfterFailedEnable(string? previousValue, bool hadPreviousValue)
+    {
+        try
+        {
+            if (hadPreviousValue && previousValue is not null)
+                _startupRegistry.SetValue(StartupValueName, previousValue);
+            else
+                _startupRegistry.DeleteValue(StartupValueName);
+        }
+        catch (Exception ex) when (ex is UnauthorizedAccessException or System.Security.SecurityException or IOException)
+        {
+            Debug.WriteLine($"Startup registry rollback failed: {ex}");
         }
     }
 

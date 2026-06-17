@@ -131,6 +131,40 @@ public sealed class StartupServiceTests
     }
 
     [TestMethod]
+    public void SetEnabledTrue_RollsBackNewRegistryValueWhenStartupApprovalClearFails()
+    {
+        FakeStartupRegistry registry = new();
+        FakeStartupApprovalRegistry approvalRegistry = new()
+        {
+            ThrowOnClearValue = true
+        };
+        StartupService service = new(() => ProcessPath, registry, approvalRegistry);
+
+        ServiceResult result = service.SetEnabled(enabled: true);
+
+        Assert.IsFalse(result.Succeeded);
+        Assert.IsNull(registry.GetValue(StartupValueName));
+    }
+
+    [TestMethod]
+    public void SetEnabledTrue_RestoresPreviousRegistryValueWhenStartupApprovalClearFails()
+    {
+        const string previousValue = @"""C:\Old\LockKeyOverlay\LockKeyOverlay.exe""";
+        FakeStartupRegistry registry = new();
+        registry.SetValue(StartupValueName, previousValue);
+        FakeStartupApprovalRegistry approvalRegistry = new()
+        {
+            ThrowOnClearValue = true
+        };
+        StartupService service = new(() => ProcessPath, registry, approvalRegistry);
+
+        ServiceResult result = service.SetEnabled(enabled: true);
+
+        Assert.IsFalse(result.Succeeded);
+        Assert.AreEqual(previousValue, registry.GetValue(StartupValueName));
+    }
+
+    [TestMethod]
     public void SetEnabled_ReturnsFailureWithoutProcessPathAndDoesNotWrite()
     {
         FakeStartupRegistry registry = new();
@@ -184,6 +218,7 @@ public sealed class StartupServiceTests
     {
         public StartupApprovalState State { get; init; } = StartupApprovalState.Unknown;
         public bool ClearValueCalled { get; private set; }
+        public bool ThrowOnClearValue { get; init; }
 
         public StartupApprovalState GetState(string valueName)
         {
@@ -193,6 +228,9 @@ public sealed class StartupServiceTests
         public void ClearValue(string valueName)
         {
             ClearValueCalled = true;
+
+            if (ThrowOnClearValue)
+                throw new IOException("Startup approval registry could not be updated.");
         }
     }
 }

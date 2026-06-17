@@ -66,6 +66,7 @@ public partial class MainWindow : Window
         InitializeComponent();
 
         _hiddenStartupClickThroughPending = !StartupWindowVisibility.ShouldShowOnStartup(startupConfigLoadResult);
+        _movementEnabled = StartupWindowVisibility.ResolveMovementEnabledOnStartup(startupConfigLoadResult);
         if (_hiddenStartupClickThroughPending)
             Opacity = 0;
 
@@ -647,24 +648,25 @@ public partial class MainWindow : Window
         _movementEnabled = config.MovementEnabled;
         Cursor = _movementEnabled ? WpfCursors.SizeAll : WpfCursors.Arrow;
 
-        _hiddenStartupClickThroughPending = false;
-        ApplyClickThroughState();
-        ApplyTopMostState();
-
         ApplyConfiguredVisibility(config.IsVisible);
+        ApplyTopMostState();
     }
 
     private void ApplyConfiguredVisibility(bool isVisible)
     {
         if (isVisible)
         {
+            _hiddenStartupClickThroughPending = false;
             Opacity = 1;
             Show();
+            ApplyClickThroughState();
             return;
         }
 
         Hide();
+        _hiddenStartupClickThroughPending = false;
         Opacity = 1;
+        ApplyClickThroughState();
     }
 
     private void SynchronizeStartupRegistration(AppConfig config)

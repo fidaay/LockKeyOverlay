@@ -9,4 +9,12 @@ internal static class StartupWindowVisibility
 
         return configLoadResult.Config?.IsVisible != false;
     }
+
+    public static bool ResolveMovementEnabledOnStartup(ConfigLoadResult? configLoadResult)
+    {
+        if (configLoadResult?.Status != ConfigLoadStatus.Loaded)
+            return true;
+
+        return configLoadResult.Config?.MovementEnabled != false;
+    }
 }
